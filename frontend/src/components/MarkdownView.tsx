@@ -1,22 +1,89 @@
 import React, { useState } from 'react';
-import { Copy, Check, Info, Code2 } from 'lucide-react';
+import { Copy, Check, Info, Code2, Sigma } from 'lucide-react';
 
 interface MarkdownViewProps {
   content: string;
+}
+
+/**
+ * Converts common LaTeX math expressions into clean, legible mathematical notation with Unicode symbols.
+ */
+export function formatLatexMath(raw: string): string {
+  if (!raw) return '';
+  let s = raw.trim();
+
+  // Strip wrapping \boxed{...} or \text{...}
+  s = s.replace(/\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, '$1');
+  s = s.replace(/\\text\{([^{}]+)\}/g, '$1');
+
+  // LaTeX spacing
+  s = s.replace(/\\[;,!]|\\quad|\\qquad/g, ' ');
+
+  // Brackets
+  s = s.replace(/\\bigl\(|\\left\(/g, '(').replace(/\\bigr\)|\\right\)/g, ')');
+  s = s.replace(/\\bigl\[|\\left\[/g, '[').replace(/\\bigr\]|\\right\]/g, ']');
+
+  // Vector / bold fonts: \mathbf{X} -> X, \boldsymbol{\beta} -> β
+  s = s.replace(/\\(?:mathbf|boldsymbol|mathbfit|bm|mathit)\{([^{}]+)\}/g, '$1');
+
+  // Fractions: \frac{a}{b} -> (a / b)
+  s = s.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1 / $2)');
+
+  // Greek letters
+  s = s.replace(/\\beta/g, 'β');
+  s = s.replace(/\\alpha/g, 'α');
+  s = s.replace(/\\theta/g, 'θ');
+  s = s.replace(/\\lambda/g, 'λ');
+  s = s.replace(/\\sigma/g, 'σ');
+  s = s.replace(/\\mu/g, 'μ');
+  s = s.replace(/\\gamma/g, 'γ');
+  s = s.replace(/\\epsilon/g, 'ε');
+  s = s.replace(/\\delta/g, 'δ');
+  s = s.replace(/\\nabla/g, '∇');
+
+  // Common mathematical symbols
+  s = s.replace(/\\hat\{y\}/g, 'ŷ');
+  s = s.replace(/\\hat\{([a-zA-Z])\}/g, '$1̂');
+  s = s.replace(/\\leftarrow/g, '←');
+  s = s.replace(/\\rightarrow/g, '→');
+  s = s.replace(/\\le/g, '≤').replace(/\\ge/g, '≥');
+  s = s.replace(/\\ne/g, '≠').replace(/\\approx/g, '≈');
+  s = s.replace(/\\times/g, '×').replace(/\\cdot/g, '·');
+  s = s.replace(/\\dots|\\cdots|\\ldots/g, '...');
+
+  // Superscripts & Subscripts
+  s = s.replace(/\\top|\^\\top|\^T/g, 'ᵀ');
+  s = s.replace(/\^\{\*\}|\^\{!\*\}|\^\*/g, '*');
+  s = s.replace(/\^\{-1\}|\^-1/g, '⁻¹');
+  s = s.replace(/\^2/g, '²').replace(/\^3/g, '³').replace(/\^k/g, 'ᵏ');
+  s = s.replace(/_0/g, '₀').replace(/_1/g, '₁').replace(/_2/g, '₂').replace(/_3/g, '₃');
+  s = s.replace(/_i/g, 'ᵢ').replace(/_j/g, 'ⱼ').replace(/_k/g, 'ₖ').replace(/_m/g, 'ₘ').replace(/_n/g, 'ₙ');
+
+  // Summations: \sum_{i=1}^{m} -> ∑(i=1 to m)
+  s = s.replace(/\\sum_\{([^{}]+)\}\^\{([^{}]+)\}/g, '∑($1 to $2) ');
+  s = s.replace(/\\sum/g, '∑ ');
+
+  // Clean remaining backslashes and redundant spaces
+  s = s.replace(/\\([a-zA-Z]+)/g, '$1');
+  s = s.replace(/\s+/g, ' ').trim();
+
+  return s;
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(code);
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(code).catch(() => {});
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-slate-800 bg-slate-950/90 shadow-md">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-xs text-slate-400">
+    <div className="my-3 rounded-xl overflow-hidden border border-slate-800 bg-slate-950/90 shadow-md">
+      <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-900 border-b border-slate-800 text-xs text-slate-400">
         <span className="font-mono flex items-center gap-1.5 text-indigo-300 font-semibold lowercase">
           <Code2 className="w-3.5 h-3.5" />
           {language || 'code'}
@@ -30,17 +97,52 @@ function CodeBlock({ code, language }: { code: string; language: string }): Reac
           <span>{copied ? 'Copied!' : 'Copy'}</span>
         </button>
       </div>
-      <pre className="p-3 overflow-x-auto text-xs font-mono text-slate-200 leading-relaxed">
+      <pre className="p-3.5 overflow-x-auto text-xs font-mono text-slate-200 leading-relaxed">
         <code>{code}</code>
       </pre>
     </div>
   );
 }
 
+function MathDisplayBlock({ math }: { math: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const formatted = formatLatexMath(math);
+
+  const handleCopy = () => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(formatted).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="my-3.5 rounded-xl border border-indigo-900/40 bg-gradient-to-r from-slate-950 via-indigo-950/20 to-slate-950 p-3 shadow-inner group relative">
+      <div className="flex items-center justify-between text-[10px] text-indigo-400/80 uppercase font-mono tracking-wider mb-1.5 px-1">
+        <span className="flex items-center gap-1">
+          <Sigma className="w-3 h-3 text-indigo-400" /> Mathematical Formula
+        </span>
+        <button
+          onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200"
+        >
+          {copied ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <div className="flex justify-center items-center py-2 overflow-x-auto">
+        <div className="font-serif text-sm md:text-base text-indigo-200 tracking-wide px-4 py-1.5 rounded-lg bg-slate-900/80 border border-indigo-900/30 shadow-sm font-medium">
+          {formatted}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function renderInlineText(text: string): React.ReactNode[] {
-  // Regex to match code, bold, link, and plain text
   const tokens: React.ReactNode[] = [];
-  const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  // Matches inline code (`...`), inline LaTeX math (\(...\) or $...$), bold (**...**), italic (*...*), or links
+  const regex = /(`[^`]+`|\\\(.+?\\\)|\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -56,6 +158,20 @@ function renderInlineText(text: string): React.ReactNode[] {
         <code key={key} className="bg-slate-800/90 text-indigo-300 border border-slate-700/60 px-1.5 py-0.5 rounded font-mono text-xs">
           {token.slice(1, -1)}
         </code>
+      );
+    } else if (token.startsWith('\\(') && token.endsWith('\\)')) {
+      const mathInner = token.slice(2, -2);
+      tokens.push(
+        <span key={key} className="font-serif italic text-indigo-300 font-medium px-1.5 py-0.5 bg-indigo-950/40 rounded border border-indigo-900/40 text-[11px] tracking-wide inline-block mx-0.5">
+          {formatLatexMath(mathInner)}
+        </span>
+      );
+    } else if (token.startsWith('$') && token.endsWith('$') && token.length > 2) {
+      const mathInner = token.slice(1, -1);
+      tokens.push(
+        <span key={key} className="font-serif italic text-indigo-300 font-medium px-1.5 py-0.5 bg-indigo-950/40 rounded border border-indigo-900/40 text-[11px] tracking-wide inline-block mx-0.5">
+          {formatLatexMath(mathInner)}
+        </span>
       );
     } else if (token.startsWith('**') && token.endsWith('**')) {
       tokens.push(
@@ -121,7 +237,54 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       continue;
     }
 
-    // 2. Table Block
+    // 2. Display Math Block: \[ ... \] or $$ ... $$
+    const trimmedLine = line.trim();
+    if (trimmedLine === '\\[' || trimmedLine.startsWith('\\[') || trimmedLine === '$$' || trimmedLine.startsWith('$$')) {
+      const isBracket = trimmedLine.startsWith('\\[');
+      let mathContent = '';
+
+      if (isBracket && trimmedLine.endsWith('\\]') && trimmedLine.length > 4) {
+        // Single-line \[ math \]
+        mathContent = trimmedLine.slice(2, -2).trim();
+        i++;
+      } else if (!isBracket && trimmedLine.endsWith('$$') && trimmedLine.length > 4) {
+        // Single-line $$ math $$
+        mathContent = trimmedLine.slice(2, -2).trim();
+        i++;
+      } else {
+        // Multi-line block
+        const mathLines: string[] = [];
+        if (isBracket && trimmedLine.length > 2) {
+          mathLines.push(trimmedLine.slice(2));
+        } else if (!isBracket && trimmedLine.length > 2) {
+          mathLines.push(trimmedLine.slice(2));
+        }
+        i++;
+        while (i < lines.length) {
+          const cur = lines[i].trim();
+          if (isBracket && (cur === '\\]' || cur.endsWith('\\]'))) {
+            if (cur.length > 2) mathLines.push(cur.slice(0, -2));
+            i++;
+            break;
+          }
+          if (!isBracket && (cur === '$$' || cur.endsWith('$$'))) {
+            if (cur.length > 2) mathLines.push(cur.slice(0, -2));
+            i++;
+            break;
+          }
+          mathLines.push(lines[i]);
+          i++;
+        }
+        mathContent = mathLines.join(' ').trim();
+      }
+
+      if (mathContent) {
+        elements.push(<MathDisplayBlock key={`math-${i}`} math={mathContent} />);
+      }
+      continue;
+    }
+
+    // 3. Table Block: Markdown Pipe Table (| col 1 | col 2 |)
     if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
       const tableLines: string[] = [];
       while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
@@ -137,12 +300,12 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
         const bodyLines = tableLines.slice(2); // Skip separator line
 
         elements.push(
-          <div key={`table-${i}`} className="my-3 overflow-x-auto rounded-lg border border-slate-800 shadow-sm">
+          <div key={`table-${i}`} className="my-3 overflow-x-auto rounded-xl border border-slate-800 shadow-sm">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-slate-800/80 border-b border-slate-700 text-slate-200">
+                <tr className="bg-slate-800/80 border-b border-slate-700 text-slate-200 font-semibold">
                   {headerCells.map((h, hIdx) => (
-                    <th key={hIdx} className="px-3 py-2 font-semibold">
+                    <th key={hIdx} className="px-3.5 py-2.5">
                       {renderInlineText(h)}
                     </th>
                   ))}
@@ -157,7 +320,7 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
                   return (
                     <tr key={rIdx} className="hover:bg-slate-800/40 transition-colors">
                       {cells.map((c, cIdx) => (
-                        <td key={cIdx} className="px-3 py-2 text-slate-300">
+                        <td key={cIdx} className="px-3.5 py-2.5 text-slate-300">
                           {renderInlineText(c)}
                         </td>
                       ))}
@@ -172,7 +335,51 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       }
     }
 
-    // 3. Blockquote / Callout Note
+    // 4. Tab-Separated Table Fallback (e.g. Symbol\tMeaning)
+    if (line.includes('\t') && line.split('\t').length >= 2) {
+      const tabTableLines: string[] = [];
+      while (i < lines.length && lines[i].includes('\t') && lines[i].split('\t').length >= 2) {
+        tabTableLines.push(lines[i]);
+        i++;
+      }
+      if (tabTableLines.length >= 2) {
+        const headerCells = tabTableLines[0].split('\t').map((c) => c.trim());
+        const bodyLines = tabTableLines.slice(1);
+
+        elements.push(
+          <div key={`tab-table-${i}`} className="my-3 overflow-x-auto rounded-xl border border-slate-800 shadow-sm">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-800/80 border-b border-slate-700 text-slate-200 font-semibold">
+                  {headerCells.map((h, hIdx) => (
+                    <th key={hIdx} className="px-3.5 py-2.5">
+                      {renderInlineText(h)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 bg-slate-900/60">
+                {bodyLines.map((row, rIdx) => {
+                  const cells = row.split('\t').map((c) => c.trim());
+                  return (
+                    <tr key={rIdx} className="hover:bg-slate-800/40 transition-colors">
+                      {cells.map((c, cIdx) => (
+                        <td key={cIdx} className="px-3.5 py-2.5 text-slate-300">
+                          {renderInlineText(c)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+        continue;
+      }
+    }
+
+    // 5. Blockquote / Callout Note
     if (line.trim().startsWith('>')) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].trim().startsWith('>')) {
@@ -185,7 +392,7 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       elements.push(
         <div
           key={`quote-${i}`}
-          className={`my-3 p-3 rounded-lg border flex gap-2.5 text-xs leading-relaxed ${
+          className={`my-3 p-3.5 rounded-xl border flex gap-2.5 text-xs leading-relaxed ${
             isNote
               ? 'bg-amber-950/30 border-amber-800/60 text-amber-200/90'
               : 'bg-slate-800/50 border-slate-700 text-slate-300'
@@ -198,7 +405,7 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       continue;
     }
 
-    // 4. Headings
+    // 6. Headings
     if (line.startsWith('### ')) {
       elements.push(
         <h3 key={`h3-${i}`} className="text-sm font-bold text-indigo-300 mt-4 mb-2 flex items-center gap-1.5">
@@ -229,14 +436,14 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       continue;
     }
 
-    // 5. Horizontal Rule
+    // 7. Horizontal Rule
     if (line.trim() === '---' || line.trim() === '***') {
       elements.push(<hr key={`hr-${i}`} className="my-4 border-slate-800" />);
       i++;
       continue;
     }
 
-    // 6. List Items
+    // 8. List Items
     const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.+)$/);
     if (listMatch) {
       const isNumbered = /^\d+\./.test(listMatch[2]);
@@ -253,7 +460,7 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
       continue;
     }
 
-    // 7. Regular paragraph / empty line
+    // 9. Regular paragraph
     if (line.trim()) {
       elements.push(
         <p key={`p-${i}`} className="my-2 text-xs leading-relaxed text-slate-300">
@@ -266,4 +473,3 @@ export function MarkdownView({ content }: MarkdownViewProps): React.JSX.Element 
 
   return <div className="space-y-1">{elements}</div>;
 }
-
