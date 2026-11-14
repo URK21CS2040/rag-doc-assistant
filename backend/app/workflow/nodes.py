@@ -94,22 +94,34 @@ class WorkflowNodes:
         if tavily_key and tavily_key.strip() and not tavily_key.startswith("your_"):
             try:
                 import httpx
+                # Search with advanced depth and extract verified facts
+                search_query = state.get("rewritten_query") or question
+                clean_query = search_query.replace('"', '').replace(' OR ', ' ').strip()
+                if len(clean_query.split()) > 10:
+                    clean_query = f"{question} {clean_query[:60]}"
+                else:
+                    clean_query = question
+
                 resp = httpx.post(
                     "https://api.tavily.com/search",
                     json={
                         "api_key": tavily_key.strip(),
-                        "query": question,
-                        "search_depth": "basic",
-                        "max_results": 3,
+                        "query": clean_query.strip(),
+                        "search_depth": "advanced",
+                        "include_answer": True,
+                        "max_results": 5,
                     },
-                    timeout=10.0,
+                    timeout=12.0,
                 )
                 if resp.status_code == 200:
                     data = resp.json()
+                    tavily_summary = data.get("answer") or ""
                     results = data.get("results", [])
-                    if results:
+                    if results or tavily_summary:
                         web_snippets = []
                         sources = []
+                        if tavily_summary:
+                            web_snippets.append(f"Fact Summary from Web Search:\n{tavily_summary}")
                         for r in results:
                             title = r.get("title", "Web Result")
                             url = r.get("url", "")
@@ -118,7 +130,7 @@ class WorkflowNodes:
                             sources.append({
                                 "document_id": f"[Web] {title}",
                                 "chunk_text": f"{url} — {content[:100]}",
-                                "score": round(r.get("score", 0.85), 2),
+                                "score": round(r.get("score", 0.90), 2),
                             })
                         web_context = "\n\n".join(web_snippets)
                         prompt = WEB_SEARCH_GENERATION_PROMPT.format(
@@ -127,7 +139,7 @@ class WorkflowNodes:
                         response = self._chat_model.invoke(prompt)
                         state["answer"] = response.content.strip()
                         state["sources"] = sources
-                        state["relevance_score"] = 0.85
+                        state["relevance_score"] = 0.90
                         return state
             except Exception as e:
                 print(f"Tavily search fallback failed: {e}")
