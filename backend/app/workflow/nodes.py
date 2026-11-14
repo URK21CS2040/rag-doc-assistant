@@ -94,53 +94,92 @@ class WorkflowNodes:
         if tavily_key and tavily_key.strip() and not tavily_key.startswith("your_"):
             try:
                 import httpx
-                # Search with advanced depth and extract verified facts
-                search_query = state.get("rewritten_query") or question
-                clean_query = search_query.replace('"', '').replace(' OR ', ' ').strip()
-                if len(clean_query.split()) > 10:
-                    clean_query = f"{question} {clean_query[:60]}"
-                else:
-                    clean_query = question
+                # Always use the user's raw question for web search to prevent vector query rewrites from injecting outdated years (like '2024')
+                clean_query = question.strip()
 
-                resp = httpx.post(
-                    "https://api.tavily.com/search",
-                    json={
-                        "api_key": tavily_key.strip(),
-                        "query": clean_query.strip(),
-                        "search_depth": "advanced",
-                        "include_answer": True,
-                        "max_results": 5,
-                    },
-                    timeout=12.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    tavily_summary = data.get("answer") or ""
-                    results = data.get("results", [])
-                    if results or tavily_summary:
-                        web_snippets = []
-                        sources = []
-                        if tavily_summary:
-                            web_snippets.append(f"Fact Summary from Web Search:\n{tavily_summary}")
-                        for r in results:
-                            title = r.get("title", "Web Result")
-                            url = r.get("url", "")
-                            content = r.get("content", "")
-                            web_snippets.append(f"Source: {title} ({url})\n{content}")
-                            sources.append({
-                                "document_id": f"[Web] {title}",
-                                "chunk_text": f"{url} — {content[:100]}",
-                                "score": round(r.get("score", 0.90), 2),
-                            })
-                        web_context = "\n\n".join(web_snippets)
-                        prompt = WEB_SEARCH_GENERATION_PROMPT.format(
-                            question=question, web_context=web_context
+                # Detect if query involves current status, leadership, recent trades, or time-sensitive events
+                time_keywords = [
+                    "current", "captain", "latest", "now", "today", "recent", "who is",
+                    "new", "trade", "traded", "coach", "ceo", "president", "minister", "leader", "squad"
+                ]
+                is_time_sensitive = any(kw in clean_query.lower() for kw in time_keywords)
+
+                results = []
+                tavily_summaries = []
+
+                # Step 1: When time-sensitive, fetch breaking/recent news first to avoid outdated static pages
+                if is_time_sensitive:
+                    try:
+                        resp_news = httpx.post(
+                            "https://api.tavily.com/search",
+                            json={
+                                "api_key": tavily_key.strip(),
+                                "query": f"{clean_query} latest news updates trade",
+                                "topic": "news",
+                                "search_depth": "advanced",
+                                "include_answer": True,
+                                "max_results": 5,
+                            },
+                            timeout=10.0,
                         )
-                        response = self._chat_model.invoke(prompt)
-                        state["answer"] = response.content.strip()
-                        state["sources"] = sources
-                        state["relevance_score"] = 0.90
-                        return state
+                        if resp_news.status_code == 200:
+                            data_news = resp_news.json()
+                            if data_news.get("answer"):
+                                tavily_summaries.append(f"Latest News Summary:\n{data_news['answer']}")
+                            for r in data_news.get("results", []):
+                                results.append(r)
+                    except Exception as e:
+                        print(f"Tavily news search failed: {e}")
+
+                # Step 2: Comprehensive advanced search for player/technical profiles
+                try:
+                    resp_gen = httpx.post(
+                        "https://api.tavily.com/search",
+                        json={
+                            "api_key": tavily_key.strip(),
+                            "query": f"{clean_query} latest",
+                            "search_depth": "advanced",
+                            "include_answer": True,
+                            "max_results": 4,
+                        },
+                        timeout=10.0,
+                    )
+                    if resp_gen.status_code == 200:
+                        data_gen = resp_gen.json()
+                        if data_gen.get("answer"):
+                            tavily_summaries.append(f"Fact Summary:\n{data_gen['answer']}")
+                        for r in data_gen.get("results", []):
+                            if not any(existing.get("url") == r.get("url") for existing in results):
+                                results.append(r)
+                except Exception as e:
+                    print(f"Tavily general search failed: {e}")
+
+                if results or tavily_summaries:
+                    web_snippets = []
+                    sources = []
+                    for s in tavily_summaries:
+                        web_snippets.append(s)
+                    for r in results[:5]:
+                        title = r.get("title", "Web Result")
+                        url = r.get("url", "")
+                        content = r.get("content", "")
+                        published = r.get("published_date")
+                        date_str = f" [Date: {published}]" if published else ""
+                        web_snippets.append(f"Source: {title}{date_str} ({url})\n{content}")
+                        sources.append({
+                            "document_id": f"[Web] {title}",
+                            "chunk_text": f"{url} — {content[:100]}",
+                            "score": round(r.get("score", 0.90), 2),
+                        })
+                    web_context = "\n\n".join(web_snippets)
+                    prompt = WEB_SEARCH_GENERATION_PROMPT.format(
+                        question=question, web_context=web_context
+                    )
+                    response = self._chat_model.invoke(prompt)
+                    state["answer"] = response.content.strip()
+                    state["sources"] = sources
+                    state["relevance_score"] = 0.90
+                    return state
             except Exception as e:
                 print(f"Tavily search fallback failed: {e}")
 
