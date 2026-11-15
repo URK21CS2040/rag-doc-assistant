@@ -21,10 +21,17 @@ User Question: {question}
 
 Instructions:
 - Provide a direct, highly relevant, and complete answer based on the documentation context above.
-- Extract and explain all key concepts, definitions, types, specifications, formulas, or steps mentioned in the context that answer the question.
+- Match the answer directly to what was asked:
+  * If asked about types or categories, list the types with definitions.
+  * If asked for a definition, provide the definition directly.
+  * If asked for a technical value or threshold, state the exact value from the documentation.
+  * If asked for a formula, provide the formula only when supported by the documentation.
+  * If asked what happens in a scenario (e.g. outage, failure, transition), explain the exact behavior and timing from the documentation.
+- When multiple questions are asked in one message, address each question separately and clearly. Never skip any question.
 - Write naturally and clearly. Do NOT follow any artificial templates or rigid format rules.
 - Strictly do NOT use the label words "Main Answer:" or "Detailed Answer:".
-- If the documentation context provides specific facts or values, use them accurately without hallucinating.
+- Strictly grounded: Never invent, assume, or generate unsupported facts, numbers, or definitions.
+- If the documentation context does not contain enough information to answer a question, state clearly that it is not specified in the document.
 
 Answer:"""
 

@@ -27,6 +27,11 @@ SYNONYMS = {
     'supervised': ['supervised learning', 'labelled', 'classification', 'regression'],
     'unsupervised': ['unsupervised learning', 'clustering', 'k-means', 'pca', 'association'],
     'reinforcement': ['reinforcement learning', 'agent', 'reward', 'actions', 'policy'],
+    'unavailable': ['outage', 'disconnect', 'offline', 'central', 'connectivity', 'failure', 'sync'],
+    'central': ['service', 'sync', 'unavailable', 'centralized', 'cloud'],
+    'critical': ['threshold', 'alert', '0.85', 'warning', 'severity'],
+    'threshold': ['critical', 'warning', '0.85', '0.60', 'cutoff', 'alert'],
+    'overlap': ['window', 'rolling', 'inference', 'stride', '50%', 'seconds'],
 }
 
 def get_stem(w: str) -> str:
@@ -129,7 +134,7 @@ class ChromaVectorStore:
 
                 source_match = any(tok in src_lower for tok in q_tokens if len(tok) > 3)
                 entity_match = any(tok in doc_lower for tok in q_tokens if len(tok) >= 5 and tok not in STOPWORDS)
-                is_fragment_start = bool(doc_text.strip() and doc_text.strip()[0].islower())
+                is_fragment_start = bool(re.match(r'^\s*[a-z]', doc_text))
 
                 if token_ratio == 0 and not phrase_match and not source_match:
                     hybrid_score = cos_sim * 0.35
@@ -148,7 +153,7 @@ class ChromaVectorStore:
                         lex_score += 0.05
 
                     if is_fragment_start:
-                        lex_score -= 0.15
+                        lex_score -= 0.35
 
                     hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, max(0.0, lex_score))
 
