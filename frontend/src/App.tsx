@@ -244,10 +244,10 @@ export default function App(): React.JSX.Element {
           rewritten_query: res.rewritten_query
         }
       ]);
-    } catch {
+    } catch (err: any) {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: 'An error occurred while processing your request. Please check your API key configuration.' }
+        { role: 'assistant', content: err?.message || 'The service encountered an issue processing your request. Please try again shortly.' }
       ]);
     } finally {
       setLoading(false);

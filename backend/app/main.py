@@ -29,16 +29,27 @@ def get_container() -> Container:
 
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, container: Container = Depends(get_container)) -> QueryResponse:
-    workflow_service: WorkflowServiceProtocol = container.get_workflow_service()
-    result = await workflow_service.run(request.question, request.session_id)
-    return QueryResponse(
-        answer=result["answer"],
-        sources=result["sources"],
-        retries=result["retries"],
-        relevance_score=result.get("relevance_score"),
-        query_intent=result.get("query_intent"),
-        rewritten_query=result.get("rewritten_query")
-    )
+    try:
+        workflow_service: WorkflowServiceProtocol = container.get_workflow_service()
+        result = await workflow_service.run(request.question, request.session_id)
+        return QueryResponse(
+            answer=result.get("answer", "No answer could be generated."),
+            sources=result.get("sources", []),
+            retries=result.get("retries", 0),
+            relevance_score=result.get("relevance_score"),
+            query_intent=result.get("query_intent"),
+            rewritten_query=result.get("rewritten_query")
+        )
+    except Exception as e:
+        print(f"Unhandled error in execute_query: {e}")
+        return QueryResponse(
+            answer="The AI model service is currently experiencing high load or a rate limit window. Please retry your question in a few moments.",
+            sources=[],
+            retries=0,
+            relevance_score=0.0,
+            query_intent="Notice",
+            rewritten_query=request.question
+        )
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_document(request: IngestRequest, container: Container = Depends(get_container)) -> IngestResponse:

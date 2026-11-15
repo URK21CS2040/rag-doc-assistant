@@ -53,22 +53,36 @@ class WorkflowNodes:
     def query_analysis_node(self, state: GraphState) -> GraphState:
         question = state["question"]
         prompt = QUERY_REWRITE_PROMPT.format(question=question)
-        response = self._chat_model.invoke(prompt)
-        text = response.content.strip()
-
-        intent = "Technical Inquiry"
+        intent = "Educational & Conceptual"
         search_query = question
 
-        for line in text.split("\n"):
-            line = line.strip()
-            if line.upper().startswith("INTENT:"):
-                extracted = line[len("INTENT:"):].strip().strip("*_`")
-                if extracted:
-                    intent = extracted
-            elif line.upper().startswith("SEARCH_QUERY:"):
-                extracted = line[len("SEARCH_QUERY:"):].strip().strip("*_`")
-                if extracted:
-                    search_query = extracted
+        try:
+            response = self._chat_model.invoke(prompt)
+            text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+            for line in text.split("\n"):
+                line = line.strip()
+                if line.upper().startswith("INTENT:"):
+                    extracted = line[len("INTENT:"):].strip().strip("*_`")
+                    if extracted:
+                        intent = extracted
+                elif line.upper().startswith("SEARCH_QUERY:"):
+                    extracted = line[len("SEARCH_QUERY:"):].strip().strip("*_`")
+                    if extracted:
+                        search_query = extracted
+        except Exception as e:
+            print(f"query_analysis_node fallback due to: {e}")
+            q_lower = question.lower()
+            if any(k in q_lower for k in ["who is", "who was", "captain", "ceo", "president", "latest version", "current status"]):
+                intent = "Fact & Status Lookup"
+            elif any(k in q_lower for k in ["is ", "is it", "has ", "confirmed", "are there", "does it contain"]):
+                intent = "Confirmation & Verification"
+            elif any(k in q_lower for k in ["vs", "difference between", "compare", "distinguish"]):
+                intent = "Comparison & Matrix"
+            elif any(k in q_lower for k in ["workflow", "architecture", "how does", "pipeline", "why is"]):
+                intent = "Analytical & Workflow"
+            else:
+                intent = "Educational & Conceptual"
+            search_query = question
 
         state["query_intent"] = intent
         state["rewritten_query"] = search_query
@@ -88,11 +102,26 @@ class WorkflowNodes:
             state["retries"] = state.get("retries", 0) + 1
             return state
 
+        # If the highest chunk score is below threshold, local docs are not relevant
+        max_score = max((c.score for c in chunks), default=0.0)
+        if max_score < 0.42:
+            state["filtered_chunks"] = []
+            state["retries"] = 99  # Skip rewrite loops, route directly to fallback
+            return state
+
+        # Only evaluate candidates with score >= 0.42 (top 4 max)
+        candidates = [c for c in chunks if c.score >= 0.42][:4]
+        filtered: List[DocumentChunk] = []
+
         def grade_chunk(chunk: DocumentChunk) -> Optional[DocumentChunk]:
+            # Solid similarity match: accept without extra LLM call
+            if chunk.score >= 0.65:
+                return chunk
+
             prompt = DOCUMENT_GRADE_PROMPT.format(question=question, chunk=chunk.text)
             try:
                 response = self._chat_model.invoke(prompt)
-                decision = response.content.strip().lower()
+                decision = response.content.strip().lower() if hasattr(response, "content") else str(response).strip().lower()
                 if ":" in decision:
                     decision = decision.split(":")[-1].strip()
                 decision = decision.strip().strip(".!*_` \n\t")
@@ -101,12 +130,12 @@ class WorkflowNodes:
                     return chunk
             except Exception as e:
                 print(f"Error grading chunk: {e}")
-                if chunk.score >= 0.5:
+                if chunk.score >= 0.50:
                     return chunk
             return None
 
-        with ThreadPoolExecutor(max_workers=min(len(chunks), 6)) as executor:
-            graded_results = list(executor.map(grade_chunk, chunks))
+        with ThreadPoolExecutor(max_workers=min(len(candidates), 4)) as executor:
+            graded_results = list(executor.map(grade_chunk, candidates))
 
         filtered = [c for c in graded_results if c is not None]
         state["filtered_chunks"] = filtered

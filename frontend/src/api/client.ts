@@ -9,7 +9,14 @@ export async function submitQuery(question: string, sessionId: string): Promise<
     body: JSON.stringify({ question, session_id: sessionId })
   });
   if (!response.ok) {
-    throw new Error('Failed to fetch query response');
+    let msg = 'Failed to fetch query response';
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = err.detail;
+    } catch {
+      // fallback
+    }
+    throw new Error(msg);
   }
   return response.json();
 }

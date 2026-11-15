@@ -22,7 +22,7 @@ services:
       - CHROMA_PERSIST_DIRECTORY=/app/data/chroma
       - ANONYMIZED_TELEMETRY=False
     volumes:
-      - ./backend/data:/app/data
+      - ./backend:/app
     restart: always
 
   frontend:
