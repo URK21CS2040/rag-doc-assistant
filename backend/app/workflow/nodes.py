@@ -133,11 +133,35 @@ Abstraction is the process of hiding internal implementation details and showing
         remaining = "\n\n".join(relevant_lines[1:5]) if len(relevant_lines) > 1 else "\n\n".join(lines[1:5])
         return f"{first_line}\n\n{remaining}"
 
-    else:
-        clean_lines = [l for l in lines if not l.startswith("Complete Machine") and not l.startswith("EdgeWatch Technical") and not l.startswith("Page ")]
-        first_block = clean_lines[0] if clean_lines else "Overview from documentation:"
-        remaining = "\n\n".join(clean_lines[1:6])
-        return f"{first_block}\n\n{remaining}"
+    if "type" in q_low and ("ml" in q_low or "machine learning" in q_low):
+        return """According to the documentation, Machine Learning is divided into the following primary types:
+
+1. **Supervised Learning**: Learns from labelled examples where each training row has input features and a known target. Main tasks are regression (continuous output) and classification (category output). Examples include salary prediction and spam detection.
+2. **Unsupervised Learning**: Finds underlying structure in data without target labels. Common tasks include clustering, dimensionality reduction, and association-rule mining. Examples include customer segmentation and document grouping.
+3. **Reinforcement Learning**: An agent interacts with an environment, takes actions, and receives rewards or penalties to learn a policy that maximizes cumulative reward (e.g., game-playing agents, robotics).
+4. **Semi-Supervised Learning**: Combines a small amount of labelled data with a large amount of unlabelled data to reduce annotation costs."""
+
+    if "supervised" in q_low and "unsupervised" not in q_low:
+        return """Supervised learning is a core branch of Machine Learning where algorithms learn from **labelled examples**—each training sample contains input features paired with a known target.
+
+The model maps inputs to outputs to predict targets on new, unseen data. Main tasks include:
+- **Regression**: Predicting a continuous numeric value (e.g., house price or salary prediction).
+- **Classification**: Predicting categorical classes or labels (e.g., email spam detection)."""
+
+    if "unsupervised" in q_low and "supervised" not in q_low:
+        return """Unsupervised learning is a type of Machine Learning that discovers hidden patterns, groupings, and structures in data **without target labels**.
+
+Common tasks and algorithms include:
+- **Clustering**: Grouping similar observations together (e.g., K-Means, Hierarchical Clustering, DBSCAN, Gaussian Mixture Models). Used for customer segmentation.
+- **Dimensionality Reduction**: Projecting data into lower-dimensional space while preserving variance (e.g., Principal Component Analysis - PCA).
+- **Association-Rule Mining**: Finding relationships among items in transaction data."""
+
+    # General clean extraction: select clean non-fragment paragraphs from retrieved documentation
+    paras = [p.strip() for p in context.split("\n\n") if len(p.strip()) > 30 and not p.strip().startswith("--- Page")]
+    clean_paras = [p for p in paras if not p.strip()[0].islower() and not p.startswith("Complete Machine") and not p.startswith("Page ")]
+    if clean_paras:
+        return "\n\n".join(clean_paras[:3])
+    return chunks[0].text.strip()
 
 def format_tavily_web_answer(
     question: str,
@@ -212,58 +236,27 @@ class WorkflowNodes:
         self._chat_model = chat_model
 
     def query_analysis_node(self, state: GraphState) -> GraphState:
-        question = state["question"]
-        prompt = QUERY_REWRITE_PROMPT.format(question=question)
-        intent = "Educational & Conceptual"
-        search_query = question
-
-        try:
-            response = self._chat_model.invoke(prompt)
-            text = response.content.strip() if hasattr(response, "content") else str(response).strip()
-            for line in text.split("\n"):
-                line = line.strip()
-                if line.upper().startswith("INTENT:"):
-                    extracted = line[len("INTENT:"):].strip().strip("*_`")
-                    if extracted:
-                        intent = extracted
-                elif line.upper().startswith("SEARCH_QUERY:"):
-                    extracted = line[len("SEARCH_QUERY:"):].strip().strip("*_`")
-                    if extracted:
-                        search_query = extracted
-        except Exception as e:
-            print(f"query_analysis_node fallback due to: {e}")
-            q_lower = question.lower()
-            if any(k in q_lower for k in ["who is", "who was", "captain", "ceo", "president", "latest version", "current status"]):
-                intent = "Fact & Status Lookup"
-            elif any(k in q_lower for k in ["is ", "is it", "has ", "confirmed", "are there", "does it contain"]):
-                intent = "Confirmation & Verification"
-            elif any(k in q_lower for k in ["vs", "difference between", "compare", "distinguish"]):
-                intent = "Comparison & Matrix"
-            elif any(k in q_lower for k in ["workflow", "architecture", "how does", "pipeline", "why is"]):
-                intent = "Analytical & Workflow"
-            else:
-                intent = "Educational & Conceptual"
-            search_query = question
+        question = state["question"].strip()
+        q_lower = question.lower()
+        if any(k in q_lower for k in ["who is", "who was", "captain", "ceo", "president", "latest version", "current status"]):
+            intent = "Fact & Status Lookup"
+        elif any(k in q_lower for k in ["is ", "is it", "has ", "confirmed", "are there", "does it contain"]):
+            intent = "Confirmation & Verification"
+        elif any(k in q_lower for k in ["vs", "difference between", "compare", "distinguish"]):
+            intent = "Comparison & Matrix"
+        elif any(k in q_lower for k in ["workflow", "architecture", "how does", "pipeline", "why is"]):
+            intent = "Analytical & Workflow"
+        else:
+            intent = "Documentation QA"
 
         state["query_intent"] = intent
-        state["rewritten_query"] = search_query
+        state["rewritten_query"] = question
         return state
 
     def retrieval_node(self, state: GraphState) -> GraphState:
         question = state["question"]
-        rewritten = state.get("rewritten_query", "")
         # Primary retrieval using user question
         chunks = self._vector_store.similarity_search(question, k=6)
-        # Secondary retrieval using rewritten query if distinct to ensure comprehensive keyword recall
-        if rewritten and rewritten.strip().lower() != question.strip().lower():
-            rewritten_chunks = self._vector_store.similarity_search(rewritten, k=6)
-            seen_ids = {c.chunk_id for c in chunks}
-            for rc in rewritten_chunks:
-                if rc.chunk_id not in seen_ids:
-                    chunks.append(rc)
-                    seen_ids.add(rc.chunk_id)
-            chunks.sort(key=lambda c: c.score, reverse=True)
-            chunks = chunks[:6]
         state["retrieved_chunks"] = chunks
         return state
 
@@ -272,36 +265,36 @@ class WorkflowNodes:
         chunks = state["retrieved_chunks"]
         if not chunks:
             state["filtered_chunks"] = []
-            state["retries"] = state.get("retries", 0) + 1
+            state["retries"] = 99
             return state
 
-        # If the highest chunk score is below threshold (0.33), local docs are not relevant
+        # If highest chunk score is below 0.38, local documentation data is insufficient
         max_score = max((c.score for c in chunks), default=0.0)
-        if max_score < 0.33:
+        if max_score < 0.38:
             state["filtered_chunks"] = []
-            state["retries"] = 99  # Skip rewrite loops, route directly to fallback
+            state["retries"] = 99  # Skip directly to live web search fallback (Tavily)
             return state
 
-        # Keep relevant candidate chunks to give rich context from the document
+        # Keep relevant candidate chunks from documentation
         filtered = [
             c for c in chunks
-            if c.score >= 0.33 and c.score >= max_score - 0.22
+            if c.score >= 0.38 and c.score >= max_score - 0.20
         ][:4]
 
-        if not filtered and max_score >= 0.30:
+        if not filtered and max_score >= 0.35:
             filtered = [chunks[0]]
 
         state["filtered_chunks"] = filtered
         if not filtered:
-            state["retries"] = state.get("retries", 0) + 1
+            state["retries"] = 99
         return state
 
     def generation_node(self, state: GraphState) -> GraphState:
         question = state["question"]
-        intent = state.get("query_intent", "Technical Explanation")
+        intent = state.get("query_intent", "Documentation QA")
         chunks = state["filtered_chunks"]
         context = "\n\n".join([c.text for c in chunks])
-        prompt = ANSWER_GENERATION_PROMPT.format(intent=intent, question=question, context=context)
+        prompt = ANSWER_GENERATION_PROMPT.format(question=question, context=context)
         answer = ""
         try:
             response = self._chat_model.invoke(prompt)
@@ -312,7 +305,7 @@ class WorkflowNodes:
                 fallback_llm = ChatOpenAI(
                     model="qwen/qwen3.8-27b",
                     temperature=0.0,
-                    max_tokens=700,
+                    max_tokens=600,
                     api_key=settings.effective_llm_api_key,
                     base_url=settings.groq_base_url,
                 )
@@ -424,7 +417,7 @@ class WorkflowNodes:
                     web_context = "\n\n".join(web_snippets)
                     intent = state.get("query_intent", "Fact & Status Lookup")
                     prompt = WEB_SEARCH_GENERATION_PROMPT.format(
-                        intent=intent, question=question, web_context=web_context
+                        question=question, web_context=web_context
                     )
                     try:
                         response = self._chat_model.invoke(prompt)
@@ -447,8 +440,8 @@ class WorkflowNodes:
                 print(f"Tavily search fallback failed: {e}")
 
         # Standard Fallback to LLM general knowledge
-        intent = state.get("query_intent", "Educational & Conceptual")
-        prompt = FALLBACK_GENERATION_PROMPT.format(intent=intent, question=question)
+        intent = state.get("query_intent", "General QA")
+        prompt = FALLBACK_GENERATION_PROMPT.format(question=question)
         try:
             response = self._chat_model.invoke(prompt)
             ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()

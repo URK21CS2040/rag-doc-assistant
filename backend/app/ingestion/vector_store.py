@@ -20,6 +20,13 @@ SYNONYMS = {
     'latency': ['delay', 'timing', 'response', 'seconds', 'event'],
     'oops': ['object-oriented', 'oop', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
     'oop': ['object-oriented', 'oops', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
+    'ml': ['machine learning', 'machine', 'learning', 'supervised', 'unsupervised', 'reinforcement', 'semi-supervised', 'classification', 'regression'],
+    'machine': ['machine learning', 'ml'],
+    'learning': ['supervised', 'unsupervised', 'machine learning', 'reinforcement', 'semi-supervised'],
+    'types': ['type', 'kinds', 'categories', 'classification', 'pillars'],
+    'supervised': ['supervised learning', 'labelled', 'classification', 'regression'],
+    'unsupervised': ['unsupervised learning', 'clustering', 'k-means', 'pca', 'association'],
+    'reinforcement': ['reinforcement learning', 'agent', 'reward', 'actions', 'policy'],
 }
 
 def get_stem(w: str) -> str:
@@ -60,7 +67,7 @@ class ChromaVectorStore:
             return []
 
         query_embedding = self._embeddings.embed_query(query)
-        pool_size = min(max(k * 10, 50), total_count)
+        pool_size = min(max(k * 3, 10), min(25, total_count))
         results = self._collection.query(
             query_embeddings=[query_embedding],
             n_results=pool_size
@@ -104,28 +111,46 @@ class ChromaVectorStore:
 
                 # Check multi-token phrase match
                 phrase_match = False
+                exact_standalone_phrase = False
                 for p_idx in range(len(q_tokens) - 1):
                     phrase = f"{q_tokens[p_idx]} {q_tokens[p_idx + 1]}"
                     if phrase in doc_lower:
                         phrase_match = True
+                        if re.search(r'(?<![a-zA-Z\-])' + re.escape(phrase) + r'(?![a-zA-Z\-])', doc_lower):
+                            exact_standalone_phrase = True
+                        break
+
+                # Check if chunk contains a direct section header or numbered item matching the query
+                header_match = False
+                for tok in q_tokens:
+                    if len(tok) >= 4 and re.search(r'(?m)^[0-9#\.\s*_-]+' + re.escape(tok), doc_lower):
+                        header_match = True
                         break
 
                 source_match = any(tok in src_lower for tok in q_tokens if len(tok) > 3)
                 entity_match = any(tok in doc_lower for tok in q_tokens if len(tok) >= 5 and tok not in STOPWORDS)
+                is_fragment_start = bool(doc_text.strip() and doc_text.strip()[0].islower())
 
                 if token_ratio == 0 and not phrase_match and not source_match:
-                    # Irrelevant candidate with zero keyword overlap: dampen hash collision score
                     hybrid_score = cos_sim * 0.35
                 else:
-                    lex_score = token_ratio * 0.70
-                    if phrase_match:
+                    lex_score = token_ratio * 0.65
+                    if exact_standalone_phrase:
+                        lex_score += 0.30
+                    elif phrase_match:
+                        lex_score += 0.15
+
+                    if header_match:
                         lex_score += 0.20
                     if source_match:
                         lex_score += 0.15
                     elif entity_match:
                         lex_score += 0.05
 
-                    hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, lex_score)
+                    if is_fragment_start:
+                        lex_score -= 0.15
+
+                    hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, max(0.0, lex_score))
 
             final_score = round(min(0.98, max(0.0, hybrid_score)), 3)
             scored_candidates.append(
