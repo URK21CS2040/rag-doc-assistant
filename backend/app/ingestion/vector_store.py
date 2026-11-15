@@ -71,26 +71,36 @@ class ChromaVectorStore:
         if total_count == 0:
             return []
 
-        query_embedding = self._embeddings.embed_query(query)
-        pool_size = min(max(k * 3, 10), min(25, total_count))
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=pool_size
-        )
-        if not results or not results["ids"] or not results["ids"][0]:
+        # Retrieve all documents to prevent HNSW small pool_size from omitting exact keyword matches
+        data = self._collection.get()
+        if not data or not data["ids"]:
             return []
 
-        ids = results["ids"][0]
-        documents = results["documents"][0]
-        metadatas = results["metadatas"][0]
-        distances = results.get("distances", [[]])[0] if results.get("distances") else []
+        ids = data["ids"]
+        documents = data["documents"]
+        metadatas = data["metadatas"]
+
+        v_id_to_dist = {}
+        try:
+            query_embedding = self._embeddings.embed_query(query)
+            pool_size = min(max(k * 3, 10), min(25, total_count))
+            vector_res = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=pool_size
+            )
+            if vector_res and vector_res["ids"] and vector_res["ids"][0]:
+                for v_id, v_d in zip(vector_res["ids"][0], vector_res["distances"][0]):
+                    v_id_to_dist[v_id] = v_d
+        except Exception as e:
+            print(f"Vector search exception (falling back to lexical): {e}")
 
         q_clean = query.lower()
         q_tokens = [w for w in re.findall(r'[a-zA-Z0-9_\-\.%]+', q_clean) if len(w) > 1 and w not in STOPWORDS]
 
         scored_candidates = []
         for i in range(len(ids)):
-            dist = distances[i] if i < len(distances) else 1.0
+            chunk_id = ids[i]
+            dist = v_id_to_dist.get(chunk_id, 1.0)
             # Convert vector distance to cosine similarity
             cos_sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
             doc_text = documents[i]
@@ -137,7 +147,7 @@ class ChromaVectorStore:
                 is_fragment_start = bool(re.match(r'^\s*[a-z]', doc_text))
 
                 if token_ratio == 0 and not phrase_match and not source_match:
-                    hybrid_score = cos_sim * 0.35
+                    hybrid_score = (cos_sim * 0.35) if chunk_id in v_id_to_dist else 0.0
                 else:
                     lex_score = token_ratio * 0.65
                     if exact_standalone_phrase:
@@ -158,18 +168,19 @@ class ChromaVectorStore:
                     hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, max(0.0, lex_score))
 
             final_score = round(min(0.98, max(0.0, hybrid_score)), 3)
-            scored_candidates.append(
-                (
-                    final_score,
-                    DocumentChunk(
-                        chunk_id=ids[i],
-                        document_id=src,
-                        text=doc_text,
-                        metadata=meta,
-                        score=final_score
+            if final_score > 0.05:
+                scored_candidates.append(
+                    (
+                        final_score,
+                        DocumentChunk(
+                            chunk_id=chunk_id,
+                            document_id=src,
+                            text=doc_text,
+                            metadata=meta,
+                            score=final_score
+                        )
                     )
                 )
-            )
 
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
         return [chunk for _, chunk in scored_candidates[:k]]
