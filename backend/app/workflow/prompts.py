@@ -9,7 +9,7 @@ SEARCH_QUERY: <concise keyword-rich search query>
 
 Question: {question}"""
 
-DOCUMENT_GRADE_PROMPT = "You are a relevance grader evaluating whether a retrieved technical documentation chunk is relevant to the user question. Return 'yes' if relevant, or 'no' if irrelevant.\n\nQuestion: {question}\n\nChunk: {chunk}\n\nDecision (yes/no):"
+DOCUMENT_GRADE_PROMPT = "You are a relevance grader evaluating whether a retrieved technical documentation chunk is relevant to the user question. Return 'yes' if relevant, or 'no' if irrelevant.\n\nQuestion: {question}\n\nChunk: {chunk}\n\nDecision (only 'yes' or 'no'):"
 
 ANSWER_GENERATION_PROMPT = """You are an expert technical documentation assistant and machine learning engineer.
 Detected Intent: {intent}

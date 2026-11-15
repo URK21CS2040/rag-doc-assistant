@@ -54,7 +54,10 @@ class WorkflowNodes:
             prompt = DOCUMENT_GRADE_PROMPT.format(question=question, chunk=chunk.text)
             response = self._chat_model.invoke(prompt)
             decision = response.content.strip().lower()
-            if "yes" in decision:
+            if ":" in decision:
+                decision = decision.split(":")[-1].strip()
+            decision = decision.strip().strip(".!*_` \n\t")
+            if decision == "yes" or decision.startswith("yes"):
                 # LLM grader confirmed relevance; ensure score reflects confirmed match
                 chunk.score = max(chunk.score, 0.75)
                 filtered.append(chunk)
