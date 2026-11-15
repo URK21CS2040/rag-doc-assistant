@@ -73,8 +73,13 @@ class WorkflowNodes:
         chunks = state["filtered_chunks"]
         context = "\n\n".join([c.text for c in chunks])
         prompt = ANSWER_GENERATION_PROMPT.format(intent=intent, question=question, context=context)
-        response = self._chat_model.invoke(prompt)
-        answer = response.content.strip()
+        try:
+            response = self._chat_model.invoke(prompt)
+            answer = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        except Exception as e:
+            print(f"Error during answer generation: {e}")
+            answer = "I am sorry, but an error occurred while contacting the model. Please submit your question again."
+
         sources = [
             {
                 "document_id": c.document_id,

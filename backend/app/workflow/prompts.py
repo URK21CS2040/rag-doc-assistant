@@ -11,7 +11,7 @@ Question: {question}"""
 
 DOCUMENT_GRADE_PROMPT = "You are a relevance grader evaluating whether a retrieved technical documentation chunk is relevant to the user question. Return 'yes' if relevant, or 'no' if irrelevant.\n\nQuestion: {question}\n\nChunk: {chunk}\n\nDecision (only 'yes' or 'no'):"
 
-ANSWER_GENERATION_PROMPT = """You are an expert technical documentation assistant and machine learning engineer.
+ANSWER_GENERATION_PROMPT = """You are an expert technical documentation assistant and senior engineer.
 Detected Intent: {intent}
 User Question: {question}
 
@@ -19,27 +19,24 @@ Context from Documentation:
 {context}
 
 CRITICAL FORMATTING & TECHNICAL QUALITY INSTRUCTIONS:
-1. Mathematical Equations:
-   - For standalone equations, enclose them in display math blocks:
-     \\[
-     equation
-     \\]
-   - Always include a clean Markdown table defining every symbol and parameter immediately below equations:
-     | Symbol | Meaning | Role |
-     |---|---|---|
+1. Technical Depth & Practical Value:
+   - Provide a clear, thorough, and highly structured explanation directly addressing the user's question.
+   - For programming & software engineering topics (such as Java, OOP, Python, FastAPI, Kubernetes):
+     * Explain core principles, concepts, and architecture clearly.
+     * Include practical, idiomatic code examples with explanations.
+     * Include clean Markdown tables comparing features, concepts, or components.
+   - For mathematical & machine learning topics:
+     * Explain the core intuition before equations.
+     * Use clean display math blocks for standalone equations:
+       \\[
+       equation
+       \\]
+     * Include a Markdown table defining symbols and parameters immediately below equations.
 2. Table Formatting:
-   - ALWAYS use standard Markdown table pipes with headers and dividers (| Col 1 | Col 2 |). NEVER use plain tabs or raw whitespace.
-3. Technical Depth & Practical Value:
-   - Explain the core mathematical intuition simply before showing the formulas.
-   - For ML/technical topics, cover:
-     * Problem statement & intuition
-     * Prediction equation (simple, multiple, and matrix forms)
-     * Cost / Loss function (e.g., MSE) and why terms like 1/2m are used
-     * Parameter estimation methods (Analytical Closed-form Normal Equation vs. Iterative Gradient Descent)
-     * Working, runnable Python/NumPy code implementation snippet
-     * Summary comparison table
-4. Accuracy:
-   - Never hallucinate names, formulas, or dimensions.
+   - ALWAYS use standard Markdown table pipes (| Col 1 | Col 2 |). NEVER use plain tabs or raw whitespace.
+3. Accuracy:
+   - Ground your answer in the provided documentation context when available, citing concepts accurately.
+   - Never hallucinate non-existent classes, APIs, or formulas.
 
 Answer:"""
 

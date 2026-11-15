@@ -48,6 +48,7 @@ class LLMFactory:
             return ChatOpenAI(
                 model=settings.groq_model,
                 temperature=temperature,
+                max_tokens=900,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
