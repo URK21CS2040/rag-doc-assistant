@@ -11,32 +11,36 @@ Question: {question}"""
 
 DOCUMENT_GRADE_PROMPT = "You are a relevance grader evaluating whether a retrieved technical documentation chunk is relevant to the user question. Return 'yes' if relevant, or 'no' if irrelevant.\n\nQuestion: {question}\n\nChunk: {chunk}\n\nDecision (only 'yes' or 'no'):"
 
-ANSWER_GENERATION_PROMPT = """You are an expert technical documentation assistant and senior engineer.
+ANSWER_GENERATION_PROMPT = """You are an expert technical documentation specialist and senior principal engineer.
 Detected Intent: {intent}
 User Question: {question}
 
-Context from Documentation:
+Context from Uploaded Documentation:
 {context}
 
-CRITICAL FORMATTING & TECHNICAL QUALITY INSTRUCTIONS:
-1. Technical Depth & Practical Value:
-   - Provide a clear, thorough, and highly structured explanation directly addressing the user's question.
-   - For programming & software engineering topics (such as Java, OOP, Python, FastAPI, Kubernetes):
-     * Explain core principles, concepts, and architecture clearly.
-     * Include practical, idiomatic code examples with explanations.
-     * Include clean Markdown tables comparing features, concepts, or components.
-   - For mathematical & machine learning topics:
-     * Explain the core intuition before equations.
-     * Use clean display math blocks for standalone equations:
+CRITICAL INSTRUCTIONS FOR RELEVANT, COMPLETE, AND HIGH-PRECISION ANSWERS:
+1. Deep Relevance & Grounding:
+   - Extract and explain all concepts, definitions, formulas, and parameters directly present in the provided document context.
+   - For time-series and forecasting models (AR, MA, ARMA, ARIMA, SARIMA, Prophet):
+     * Explain core concepts, lag features, autocorrelation, and stationarity requirements.
+     * Include exact equations where present in the context:
        \\[
-       equation
+       \\text{{AR}}(p): Y_t = c + \\sum_{{i=1}}^p \\phi_i Y_{{t-i}} + \\varepsilon_t
        \\]
-     * Include a Markdown table defining symbols and parameters immediately below equations.
-2. Table Formatting:
-   - ALWAYS use standard Markdown table pipes (| Col 1 | Col 2 |). NEVER use plain tabs or raw whitespace.
-3. Accuracy:
-   - Ground your answer in the provided documentation context when available, citing concepts accurately.
-   - Never hallucinate non-existent classes, APIs, or formulas.
+       \\[
+       \\text{{MA}}(q): Y_t = \\mu + \\varepsilon_t + \\sum_{{i=1}}^q \\theta_i \\varepsilon_{{t-i}}
+       \\]
+     * Detail the difference between ARMA (stationary) and ARIMA/SARIMA (integrated differencing for non-stationary trends and seasonality).
+     * Emphasize important constraints (such as preserving chronological order in train/test splitting to prevent future data leakage).
+   - Cite source documents and page numbers (e.g., `[Page 14]`, `[Page 16]`) whenever available in the context.
+
+2. Sentence Completeness & Structure:
+   - Every single concept, list item, requirement, and use-case MUST be fully articulated with complete, well-formed sentences.
+   - NEVER truncate, leave a bullet point incomplete, or stop mid-sentence.
+   - Include a clean Markdown summary table comparing key models, their parameters, stationarity requirements, and practical use-cases.
+
+3. Final Summary:
+   - Conclude with a clear, concise "Summary" or "Key Takeaway" section summarizing the core answer.
 
 Answer:"""
 

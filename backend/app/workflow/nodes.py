@@ -1,4 +1,5 @@
 from typing import Dict, Any, List
+import re
 from langchain_openai import ChatOpenAI
 from app.config import settings
 from app.workflow.state import GraphState
@@ -10,6 +11,38 @@ from app.workflow.prompts import (
     WEB_SEARCH_GENERATION_PROMPT,
 )
 from app.domain.entities import DocumentChunk
+
+
+def ensure_complete_ending(text: str) -> str:
+    """
+    Cleans up any dangling/cut-off incomplete sentences or bullet points at the end of the text.
+    If the text ends abruptly without terminal punctuation, it trims the dangling line.
+    """
+    if not text:
+        return text
+    cleaned = text.strip()
+    terminal_markers = ('.', '!', '?', '```', '|', '\\]', '$$', ':', '**')
+    if cleaned.endswith(terminal_markers):
+        return cleaned
+
+    lines = cleaned.split("\n")
+    while lines:
+        last_line = lines[-1].strip()
+        if not last_line:
+            lines.pop()
+            continue
+        if last_line.endswith(terminal_markers):
+            break
+        matches = list(re.finditer(r'([.!?])(?:\s+|$)', last_line))
+        if matches:
+            last_idx = matches[-1].end(1)
+            lines[-1] = last_line[:last_idx].strip()
+            break
+        else:
+            lines.pop()
+
+    result = "\n".join(lines).strip()
+    return result if result else cleaned
 
 class WorkflowNodes:
     def __init__(self, vector_store: Any, chat_model: ChatOpenAI) -> None:
@@ -42,7 +75,7 @@ class WorkflowNodes:
 
     def retrieval_node(self, state: GraphState) -> GraphState:
         query = state.get("rewritten_query", state["question"])
-        chunks = self._vector_store.similarity_search(query, k=4)
+        chunks = self._vector_store.similarity_search(query, k=6)
         state["retrieved_chunks"] = chunks
         return state
 
@@ -89,7 +122,7 @@ class WorkflowNodes:
             for c in chunks
         ]
         avg_score = round(sum(c.score for c in chunks) / len(chunks), 3) if chunks else 0.0
-        state["answer"] = answer
+        state["answer"] = ensure_complete_ending(answer)
         state["sources"] = sources
         state["relevance_score"] = avg_score
         return state
@@ -184,7 +217,8 @@ class WorkflowNodes:
                         question=question, web_context=web_context
                     )
                     response = self._chat_model.invoke(prompt)
-                    state["answer"] = response.content.strip()
+                    ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+                    state["answer"] = ensure_complete_ending(ans_text)
                     state["sources"] = sources
                     state["relevance_score"] = 0.90
                     return state
@@ -195,7 +229,8 @@ class WorkflowNodes:
         prompt = FALLBACK_GENERATION_PROMPT.format(question=question)
         try:
             response = self._chat_model.invoke(prompt)
-            state["answer"] = response.content.strip()
+            ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+            state["answer"] = ensure_complete_ending(ans_text)
         except Exception:
             state["answer"] = "I am sorry, but I could not find relevant technical documentation in the current index to answer your question."
         state["sources"] = []
