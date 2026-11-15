@@ -44,7 +44,7 @@ class WorkflowService:
         if retries < 1:
             retrieved = state.get("retrieved_chunks", [])
             max_score = max((c.score for c in retrieved), default=0.0)
-            if max_score >= 0.42:
+            if max_score >= 0.38:
                 return "rewrite"
         return "fallback"
 

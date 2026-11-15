@@ -89,8 +89,20 @@ class WorkflowNodes:
         return state
 
     def retrieval_node(self, state: GraphState) -> GraphState:
-        query = state.get("rewritten_query", state["question"])
-        chunks = self._vector_store.similarity_search(query, k=6)
+        question = state["question"]
+        rewritten = state.get("rewritten_query", "")
+        # Primary retrieval using user question
+        chunks = self._vector_store.similarity_search(question, k=6)
+        # Secondary retrieval using rewritten query if distinct to ensure comprehensive keyword recall
+        if rewritten and rewritten.strip().lower() != question.strip().lower():
+            rewritten_chunks = self._vector_store.similarity_search(rewritten, k=6)
+            seen_ids = {c.chunk_id for c in chunks}
+            for rc in rewritten_chunks:
+                if rc.chunk_id not in seen_ids:
+                    chunks.append(rc)
+                    seen_ids.add(rc.chunk_id)
+            chunks.sort(key=lambda c: c.score, reverse=True)
+            chunks = chunks[:6]
         state["retrieved_chunks"] = chunks
         return state
 
@@ -104,18 +116,18 @@ class WorkflowNodes:
 
         # If the highest chunk score is below threshold, local docs are not relevant
         max_score = max((c.score for c in chunks), default=0.0)
-        if max_score < 0.42:
+        if max_score < 0.38:
             state["filtered_chunks"] = []
             state["retries"] = 99  # Skip rewrite loops, route directly to fallback
             return state
 
-        # Only evaluate candidates with score >= 0.42 (top 4 max)
-        candidates = [c for c in chunks if c.score >= 0.42][:4]
+        # Only evaluate candidates with score >= 0.38 (top 4 max)
+        candidates = [c for c in chunks if c.score >= 0.38][:4]
         filtered: List[DocumentChunk] = []
 
         def grade_chunk(chunk: DocumentChunk) -> Optional[DocumentChunk]:
             # Solid similarity match: accept without extra LLM call
-            if chunk.score >= 0.65:
+            if chunk.score >= 0.60:
                 return chunk
 
             prompt = DOCUMENT_GRADE_PROMPT.format(question=question, chunk=chunk.text)
@@ -130,7 +142,7 @@ class WorkflowNodes:
                     return chunk
             except Exception as e:
                 print(f"Error grading chunk: {e}")
-                if chunk.score >= 0.50:
+                if chunk.score >= 0.45:
                     return chunk
             return None
 

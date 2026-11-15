@@ -13,5 +13,6 @@ class IngestionService:
         if not content:
             return 0
         chunks = self._chunker.split_text(file_path, content)
+        self._vector_store.delete_document(file_path)
         self._vector_store.add_chunks(chunks)
         return len(chunks)

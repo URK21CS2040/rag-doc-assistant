@@ -25,6 +25,12 @@ User Question: {question}
 Context from Uploaded Documentation:
 {context}
 
+CRITICAL GROUNDING & ACCURACY RULES:
+- Prioritize relevant content from the uploaded and indexed documentation context above.
+- Never invent answers, technical values, definitions, metrics, or explanations. Rely strictly on facts directly stated in the context.
+- Ensure citations and retrieved source excerpts (e.g. `[Page 2]`, `[Page 3]`, section names) actually support the generated answer.
+- If information is genuinely absent from the provided context, clearly state that it is not specified in the document rather than speculating.
+
 CRITICAL ADAPTIVE FORMATTING & INTENT INSTRUCTIONS:
 Understand the user's intent and select the appropriate answer format based on the question. DO NOT use one fixed answer template for every question.
 

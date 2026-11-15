@@ -1,8 +1,30 @@
+import re
 from typing import List, Dict, Any
 import chromadb
 from langchain_openai import OpenAIEmbeddings
 from app.config import settings
 from app.domain.entities import DocumentChunk
+
+STOPWORDS = {
+    'what', 'is', 'the', 'for', 'are', 'a', 'an', 'in', 'of', 'to', 'and', 'or', 'on',
+    'with', 'by', 'at', 'from', 'this', 'that', 'it', 'does', 'how', 'why', 'can',
+    'explain', 'show', 'tell', 'me', 'about', 'do', 'we', 'give', 'list', 'describe'
+}
+
+SYNONYMS = {
+    'capacity': ['assets', 'maximum', 'supported', 'limit', 'devices', 'nodes'],
+    'retention': ['buffer', 'hours', 'store', 'storage', 'retention_hours', 'retained'],
+    'buffer': ['retention', 'offline', 'queue', 'hours', 'summaries'],
+    'hardware': ['cpu', 'memory', 'ram', 'storage', 'ssd', 'requirements', 'minimum'],
+    'requirements': ['requirement', 'specifications', 'minimum', 'recommended', 'config'],
+    'latency': ['delay', 'timing', 'response', 'seconds', 'event'],
+}
+
+def get_stem(w: str) -> str:
+    for suff in ['ation', 'tion', 'ments', 'ment', 'ing', 'ed', 'ies', 'es', 's']:
+        if w.endswith(suff) and len(w) - len(suff) >= 3:
+            return w[:-len(suff)]
+    return w
 
 class ChromaVectorStore:
     def __init__(self, embeddings: OpenAIEmbeddings) -> None:
@@ -24,41 +46,107 @@ class ChromaVectorStore:
             embeddings=embeddings_list
         )
 
+    def delete_document(self, document_id: str) -> None:
+        try:
+            self._collection.delete(where={"source": document_id})
+        except Exception as e:
+            print(f"Error deleting document {document_id}: {e}")
+
     def similarity_search(self, query: str, k: int = 4) -> List[DocumentChunk]:
+        total_count = self._collection.count()
+        if total_count == 0:
+            return []
+
         query_embedding = self._embeddings.embed_query(query)
+        pool_size = min(max(k * 10, 50), total_count)
         results = self._collection.query(
             query_embeddings=[query_embedding],
-            n_results=k
+            n_results=pool_size
         )
-        chunks: List[DocumentChunk] = []
         if not results or not results["ids"] or not results["ids"][0]:
-            return chunks
-        
+            return []
+
         ids = results["ids"][0]
         documents = results["documents"][0]
         metadatas = results["metadatas"][0]
         distances = results.get("distances", [[]])[0] if results.get("distances") else []
 
+        q_clean = query.lower()
+        q_tokens = [w for w in re.findall(r'[a-zA-Z0-9_\-\.%]+', q_clean) if len(w) > 1 and w not in STOPWORDS]
+
+        scored_candidates = []
         for i in range(len(ids)):
             dist = distances[i] if i < len(distances) else 1.0
-            # Convert distance between unit-normalized vectors to cosine similarity score [0.0, 1.0]
-            sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
-            chunks.append(
-                DocumentChunk(
-                    chunk_id=ids[i],
-                    document_id=metadatas[i].get("source", "unknown"),
-                    text=documents[i],
-                    metadata=metadatas[i],
-                    score=round(sim, 3)
+            # Convert vector distance to cosine similarity
+            cos_sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+            doc_text = documents[i]
+            meta = metadatas[i] if i < len(metadatas) else {}
+            src = meta.get("source", "unknown")
+            doc_lower = doc_text.lower()
+            src_lower = src.lower()
+
+            if not q_tokens:
+                hybrid_score = cos_sim
+            else:
+                matched_count = 0
+                synonym_matched = 0
+                for tok in q_tokens:
+                    tok_stem = get_stem(tok)
+                    if tok in doc_lower or (len(tok_stem) >= 4 and tok_stem in doc_lower):
+                        matched_count += 1
+                    elif tok in SYNONYMS:
+                        if any(syn in doc_lower for syn in SYNONYMS[tok]):
+                            synonym_matched += 1
+
+                token_ratio = (matched_count + 0.8 * synonym_matched) / len(q_tokens)
+
+                # Check multi-token phrase match
+                phrase_match = False
+                for p_idx in range(len(q_tokens) - 1):
+                    phrase = f"{q_tokens[p_idx]} {q_tokens[p_idx + 1]}"
+                    if phrase in doc_lower:
+                        phrase_match = True
+                        break
+
+                source_match = any(tok in src_lower for tok in q_tokens if len(tok) > 3)
+                entity_match = any(tok in doc_lower for tok in q_tokens if len(tok) >= 5 and tok not in STOPWORDS)
+
+                if token_ratio == 0 and not phrase_match and not source_match:
+                    # Irrelevant candidate with zero keyword overlap: dampen hash collision score
+                    hybrid_score = cos_sim * 0.35
+                else:
+                    lex_score = token_ratio * 0.70
+                    if phrase_match:
+                        lex_score += 0.20
+                    if source_match:
+                        lex_score += 0.15
+                    elif entity_match:
+                        lex_score += 0.05
+
+                    hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, lex_score)
+
+            final_score = round(min(0.98, max(0.0, hybrid_score)), 3)
+            scored_candidates.append(
+                (
+                    final_score,
+                    DocumentChunk(
+                        chunk_id=ids[i],
+                        document_id=src,
+                        text=doc_text,
+                        metadata=meta,
+                        score=final_score
+                    )
                 )
             )
-        return chunks
+
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        return [chunk for _, chunk in scored_candidates[:k]]
 
     def get_all_documents(self) -> List[Dict[str, Any]]:
         data = self._collection.get()
         if not data or not data["ids"]:
             return []
-        
+
         doc_map: Dict[str, str] = {}
         for i, meta in enumerate(data["metadatas"]):
             source = meta.get("source", "unknown")
