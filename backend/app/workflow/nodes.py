@@ -48,16 +48,21 @@ def ensure_complete_ending(text: str) -> str:
 
 def remove_answer_labels(text: str) -> str:
     """
-    Removes the literal label words 'Main Answer:' and 'Detailed Answer:' (including markdown bold markers)
-    from the text while preserving all content and formatting.
+    Removes the literal label words 'Main Answer' and 'Detailed Answer' (and standalone 'Answer' labels),
+    including markdown formatting like **, ##, or colons, while preserving all content and structure.
     """
     if not text:
         return text
-    # Remove 'Main Answer:' or '**Main Answer:**' at start or line begin
-    cleaned = re.sub(r'(?im)^\s*(?:\*\*)?main\s+answer:?(?:\*\*)?\s*', '', text)
-    # Remove 'Detailed Answer:' or '**Detailed Answer:**'
-    cleaned = re.sub(r'(?im)^\s*(?:\*\*)?detailed\s+answer:?(?:\*\*)?\s*', '', cleaned)
-    # Normalize any excess consecutive newlines to standard double newlines
+    cleaned = re.sub(r'(?im)^[ \t>#*_-]*main\s+answer[ \t*:]*[ \t]*\n?', '', text)
+    cleaned = re.sub(r'(?im)^[ \t>#*_-]*detailed\s+answer[ \t*:]*[ \t]*\n?', '\n', cleaned)
+    cleaned = re.sub(r'(?im)^[ \t>#*_-]*answer[ \t*:]*[ \t]*\n?', '', cleaned)
+    cleaned = re.sub(r'(?i)^\s*(?:\*\*)?(?:main\s+answer|detailed\s+answer|answer):?(?:\*\*)?\s*', '', cleaned)
+    cleaned = re.sub(
+        r'(\n>[^\n]*\n+)\s*(?:\*\*)?(?:main\s+answer|detailed\s+answer|answer):?(?:\*\*)?\s*',
+        r'\1',
+        cleaned,
+        flags=re.I
+    )
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 

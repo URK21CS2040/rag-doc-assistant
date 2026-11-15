@@ -50,21 +50,21 @@ class LLMFactory:
             primary = ChatOpenAI(
                 model=primary_model,
                 temperature=temperature,
-                max_tokens=2500,
+                max_tokens=1200,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
             fallback_1 = ChatOpenAI(
                 model=fallback_1_model,
                 temperature=temperature,
-                max_tokens=2500,
+                max_tokens=1200,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
             fallback_2 = ChatOpenAI(
                 model="qwen/qwen3.8-27b",
                 temperature=temperature,
-                max_tokens=950,
+                max_tokens=800,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
