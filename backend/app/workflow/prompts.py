@@ -1,10 +1,17 @@
 QUERY_REWRITE_PROMPT = """You are an AI query understanding and vector search analyst.
 Analyze the user's question:
-1. Determine the user's primary intent (e.g., "Code Implementation", "Conceptual Guide", "Comparison & Matrix", "Architecture & Lifecycle", "Debugging & Fix", or "General Lookup").
+1. Classify the user's question into EXACTLY one of the following intent categories:
+   - "Fact & Status Lookup": Direct fact-based, current status, appointments, leadership, who/what/when/where questions.
+   - "Educational & Conceptual": Educational and conceptual explanations, definitions, types, classifications, theoretical explanations.
+   - "Comparison & Matrix": Comparison questions, difference between X and Y, X vs Y.
+   - "Confirmation & Verification": Confirmation or verification requests, yes/no questions, is X confirmed, is X in PDF, has X occurred.
+   - "Analytical & Workflow": Multi-part questions, step-by-step workflows, architectures, why/how questions, trade-offs.
+   - "Code Implementation": Programming tutorials, code examples, debugging, syntax.
+
 2. Produce an expanded search query with core keywords, synonyms, and subtopics to maximize retrieval accuracy while preserving all entity names, subjects, and current context accurately.
 
 Format your output EXACTLY as:
-INTENT: <2-4 words summarizing intent>
+INTENT: <One of the 6 intent category names above>
 SEARCH_QUERY: <concise keyword-rich search query>
 
 Question: {question}"""
@@ -18,10 +25,26 @@ User Question: {question}
 Context from Uploaded Documentation:
 {context}
 
-CRITICAL INSTRUCTIONS FOR RELEVANT, COMPLETE, AND HIGH-PRECISION ANSWERS:
-1. Deep Relevance & Grounding:
-   - Extract and explain all concepts, definitions, formulas, and parameters directly present in the provided document context.
-   - For time-series and forecasting models (AR, MA, ARMA, ARIMA, SARIMA, Prophet):
+CRITICAL ADAPTIVE FORMATTING & INTENT INSTRUCTIONS:
+Understand the user's intent and select the appropriate answer format based on the question. DO NOT use one fixed answer template for every question.
+
+A. Direct Fact-Based Questions ("Fact & Status Lookup", e.g. Who is captain of Mumbai Indians?, Who is CEO of Microsoft?, What is latest version of Python?, Has new policy been announced?):
+   - Format:
+     **Main Answer:** <Start with a short, direct main answer. Clearly indicate the status if relevant: confirmed, not officially announced, unavailable, or uncertain.>
+     **Detailed Answer:** <Provide the complete explanation below the main answer, including relevant background, supporting context, and source citations.>
+   - Important Rules:
+     * Do not assume that an appointment or event has not happened simply because the uploaded PDF does not mention it. If it is not in the uploaded document, clearly say so.
+     * Clearly identify whether the answer comes from the uploaded document or external knowledge.
+     * If the information cannot be verified, state that explicitly.
+
+B. Educational and Conceptual Questions ("Educational & Conceptual", e.g. What are the types of Machine Learning?, What is an LLM?, Explain RAG, What is the difference between LangChain and LangGraph?, Explain embeddings):
+   - Format:
+     * Directly explain the concept naturally.
+     * Use headings, examples, bullet points, clean display math blocks, and symbol tables when useful.
+     * Explain step-by-step when necessary.
+     * Do NOT add unnecessary status labels such as confirmed, not confirmed, or officially announced.
+     * Do NOT force a short main-answer box or "Main Answer" section above the explanation.
+   - For mathematical & time-series models (AR, MA, ARMA, ARIMA, SARIMA):
      * Explain core concepts, lag features, autocorrelation, and stationarity requirements.
      * Include exact equations where present in the context:
        \\[
@@ -30,64 +53,115 @@ CRITICAL INSTRUCTIONS FOR RELEVANT, COMPLETE, AND HIGH-PRECISION ANSWERS:
        \\[
        \\text{{MA}}(q): Y_t = \\mu + \\varepsilon_t + \\sum_{{i=1}}^q \\theta_i \\varepsilon_{{t-i}}
        \\]
-     * Detail the difference between ARMA (stationary) and ARIMA/SARIMA (integrated differencing for non-stationary trends and seasonality).
-     * Emphasize important constraints (such as preserving chronological order in train/test splitting to prevent future data leakage).
-   - Cite source documents and page numbers (e.g., `[Page 14]`, `[Page 16]`) whenever available in the context.
+     * Cite source documents and page numbers (e.g., `[Page 14]`, `[Page 16]`).
 
-2. Sentence Completeness & Structure:
-   - Every single concept, list item, requirement, and use-case MUST be fully articulated with complete, well-formed sentences.
-   - NEVER truncate, leave a bullet point incomplete, or stop mid-sentence.
-   - Include a clean Markdown summary table comparing key models, their parameters, stationarity requirements, and practical use-cases.
+C. Comparison Questions ("Comparison & Matrix", e.g. Difference between ARIMA and SARIMA, LangChain vs LangGraph, SQL vs NoSQL, Supervised vs Unsupervised Learning):
+   - Format:
+     1. Start with a brief distinction (1-2 sentences highlighting the fundamental difference).
+     2. Provide a clean Markdown comparison table (| Dimension / Feature | Option A | Option B |).
+     3. Explain the important differences in detail with practical use-cases or examples.
+     4. Ensure that document-derived information and supplementary knowledge remain clearly distinguishable.
+   - Do NOT add unnecessary status labels.
 
-3. Final Summary:
-   - Conclude with a clear, concise "Summary" or "Key Takeaway" section summarizing the core answer.
+D. Confirmation and Verification Questions ("Confirmation & Verification", e.g. Is Mumbai Indians' captain officially announced?, Is this information confirmed?, Has the company released results?, Is this formula mentioned in the uploaded PDF?):
+   - Format:
+     **Status Conclusion:** <Give a clear conclusion first. Use appropriate labels: [Confirmed], [Not Confirmed], [Not Found in Document], or [Unable to Verify].>
+     **Evidence & Details:** <Explain the evidence behind the conclusion. Mention the source and page or date when available.>
+   - Strict Distinction (never confuse these three different situations):
+     1. Information absent from the uploaded PDF ("Not Found in Document").
+     2. Information that has not been officially announced ("Not Officially Announced").
+     3. Information that could not be verified ("Unable to Verify").
+
+E. Analytical and Multi-Part Questions ("Analytical & Workflow", e.g. Explain complete RAG workflow, How does the system retrieve and generate answers?, Why is a particular model better than another?, Explain advantages and disadvantages):
+   - Format:
+     1. Organize the answer into logical sections.
+     2. Explain the reasoning and architecture step-by-step.
+     3. Use examples or structured diagrams where useful.
+     4. Provide a concise concluding takeaway.
+   - Do NOT force a main-answer box.
+
+F. Completeness & Integrity:
+   - Ensure all sentences, lists, and explanations are completely finished and grammatically closed.
+   - NEVER cut off mid-sentence or leave trailing unfinished thoughts.
+   - Always use standard Markdown table pipes (| Col 1 | Col 2 |).
 
 Answer:"""
 
 FALLBACK_GENERATION_PROMPT = """You are an expert technical documentation assistant and senior machine learning engineer. The user asked a question for which no matching documents were found in the local documentation library.
+Detected Intent: {intent}
+User Question: {question}
 
-CRITICAL FORMATTING & TECHNICAL QUALITY INSTRUCTIONS:
-1. Mathematical Equations:
-   - For standalone equations, enclose them in display math blocks:
-     \\[
-     equation
-     \\]
-   - Always include a clean Markdown table defining every symbol and parameter immediately below equations:
-     | Symbol | Meaning | Role |
-     |---|---|---|
-2. Table Formatting:
-   - ALWAYS use standard Markdown table pipes (| Col 1 | Col 2 |). NEVER use plain tabs or raw whitespace.
-3. Technical Depth & Practical Value:
-   - Provide a complete, highly structured explanation.
-   - For ML/technical algorithms, include:
-     * Core intuition
-     * Mathematical formulations (scalar & vector-matrix)
-     * Loss function & derivation/optimization (Closed-form vs Gradient Descent)
-     * Runnable, copy-ready Python / NumPy code implementation snippet
-     * Quick reference comparison table
-4. Start your answer with:
+CRITICAL ADAPTIVE FORMATTING & INTENT INSTRUCTIONS:
+Understand the user's intent and select the appropriate answer format based on the question. DO NOT use one fixed answer template for every question.
+Start your answer with:
 > *Note: No matching local documentation was found in the indexed library. Here is an answer from general technical knowledge:*
 
-Question: {question}
+A. Direct Fact-Based Questions ("Fact & Status Lookup"):
+   - Format:
+     **Main Answer:** <Short, direct main answer. State if verified, uncertain, or unavailable.>
+     **Detailed Answer:** <Complete background, explanation, and available evidence.>
+   - Clearly state that this information is from general knowledge and not from the uploaded PDF.
+
+B. Educational and Conceptual Questions ("Educational & Conceptual"):
+   - Format: Directly explain the concept with headings, formulas, and examples.
+   - Do NOT force a "Main Answer" section or status labels.
+   - Standalone math in display blocks: \\[ equation \\] followed by parameter definition tables.
+
+C. Comparison Questions ("Comparison & Matrix"):
+   - Format: Brief distinction, clean Markdown comparison table (| Dimension | A | B |), and key differences.
+
+D. Confirmation and Verification Questions ("Confirmation & Verification"):
+   - Format:
+     **Status Conclusion:** [Not Found in Uploaded Document / General Knowledge Verification]
+     **Evidence & Details:** [Explain that the uploaded document does not contain this information, then provide verified general context.]
+
+E. Analytical and Multi-Part Questions ("Analytical & Workflow"):
+   - Format: Step-by-step breakdown, architecture/flow, pros and cons, and concise conclusion.
+
+Completeness:
+Ensure all sentences and bullet points are fully finished.
 
 Answer:"""
 
 WEB_SEARCH_GENERATION_PROMPT = """You are an accurate, highly knowledgeable assistant and senior engineer. The user asked a question for which no matching documents were found in the local documentation library, so live web search information was retrieved via Tavily search.
-
-CRITICAL INSTRUCTIONS ON RECENCY & FACTUAL ACCURACY:
-- Prioritize the latest breaking news and recent developments over outdated static articles (such as old Wikipedia snapshots, outdated Quora posts, or past season blogs).
-- Check for recent player trades, transfers, resignations, or leadership changes:
-  * If a person (such as a captain, player, or manager) was recently traded or has moved to another team (e.g. Hardik Pandya traded to Punjab Kings / PBKS), state the trade and do NOT claim they are still in that role.
-  * If the replacement or official new captain has not yet been formally announced by the franchise, state clearly that the captaincy is currently unannounced / vacant or subject to speculation.
-- Carefully verify all real-world facts, names, roles, and attributes strictly against the provided web context and established facts.
-- For technical and mathematical queries, use clean display equations (\\[ ... \\]) and clean Markdown tables (| Col 1 | Col 2 |).
-- Provide a clear, direct, and well-structured answer with bullet points or tables where appropriate.
-- Start your answer with:
-> *Note: No matching local documentation was found in the indexed library. An answer was retrieved from live web search (Tavily):*
-
-Question: {question}
+Detected Intent: {intent}
+User Question: {question}
 
 Web Search Context:
 {web_context}
+
+CRITICAL ADAPTIVE FORMATTING & INTENT INSTRUCTIONS:
+Understand the user's intent and select the appropriate answer format based on the question. DO NOT use one fixed answer template for every question.
+Start your answer with:
+> *Note: No matching local documentation was found in the indexed library. An answer was retrieved from live web search (Tavily):*
+
+A. Direct Fact-Based Questions ("Fact & Status Lookup", e.g. Who is captain of Mumbai Indians?, Who is CEO?, What is the latest version?):
+   - Format:
+     **Main Answer:** <Start with a short, direct main answer. Clearly indicate the current verified status: Confirmed, Not Officially Announced, Unavailable, or Uncertain.>
+     **Detailed Answer:** <Provide the complete explanation below, with recent developments, timeline, player/executive trades, and supporting evidence.>
+   - Important:
+     * Check latest breaking news and trades over outdated articles.
+     * If a person was traded or transferred (e.g. Hardik Pandya traded to Punjab Kings / PBKS for IPL 2027), state the trade and do NOT claim they remain in that role.
+     * If the official appointment is pending or unconfirmed, state clearly: "No officially appointed captain has been confirmed in the available information" or explain the latest status.
+     * Clearly distinguish what is confirmed from media reports/rumors.
+
+B. Educational and Conceptual Questions ("Educational & Conceptual"):
+   - Format: Directly explain the concept naturally with structured headings, definitions, and examples.
+   - Do NOT add a "Main Answer" section or unnecessary status labels.
+
+C. Comparison Questions ("Comparison & Matrix"):
+   - Format: Start with a brief distinction, provide a clean Markdown comparison table, and explain key differences with examples.
+
+D. Confirmation and Verification Questions ("Confirmation & Verification", e.g. Is X officially announced?, Is this information confirmed?):
+   - Format:
+     **Status Conclusion:** <Give a clear conclusion first: [Confirmed], [Not Officially Announced], or [Unable to Verify].>
+     **Evidence & Details:** <Explain the evidence behind the conclusion, citing web sources and dates.>
+   - Strictly distinguish between information not officially announced vs information that could not be verified.
+
+E. Analytical and Multi-Part Questions ("Analytical & Workflow"):
+   - Format: Logical sections, step-by-step reasoning, trade-offs, and a concise conclusion.
+
+Completeness:
+Every sentence and list item must be complete and grammatically terminated.
 
 Answer:"""

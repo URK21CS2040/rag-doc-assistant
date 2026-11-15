@@ -1,4 +1,5 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 import re
 from langchain_openai import ChatOpenAI
 from app.config import settings
@@ -82,19 +83,32 @@ class WorkflowNodes:
     def document_grading_node(self, state: GraphState) -> GraphState:
         question = state["question"]
         chunks = state["retrieved_chunks"]
-        filtered: List[DocumentChunk] = []
-        for chunk in chunks:
+        if not chunks:
+            state["filtered_chunks"] = []
+            state["retries"] = state.get("retries", 0) + 1
+            return state
+
+        def grade_chunk(chunk: DocumentChunk) -> Optional[DocumentChunk]:
             prompt = DOCUMENT_GRADE_PROMPT.format(question=question, chunk=chunk.text)
-            response = self._chat_model.invoke(prompt)
-            decision = response.content.strip().lower()
-            if ":" in decision:
-                decision = decision.split(":")[-1].strip()
-            decision = decision.strip().strip(".!*_` \n\t")
-            if decision == "yes" or decision.startswith("yes"):
-                # LLM grader confirmed relevance; ensure score reflects confirmed match
-                chunk.score = max(chunk.score, 0.75)
-                filtered.append(chunk)
-        
+            try:
+                response = self._chat_model.invoke(prompt)
+                decision = response.content.strip().lower()
+                if ":" in decision:
+                    decision = decision.split(":")[-1].strip()
+                decision = decision.strip().strip(".!*_` \n\t")
+                if decision == "yes" or decision.startswith("yes"):
+                    chunk.score = max(chunk.score, 0.75)
+                    return chunk
+            except Exception as e:
+                print(f"Error grading chunk: {e}")
+                if chunk.score >= 0.5:
+                    return chunk
+            return None
+
+        with ThreadPoolExecutor(max_workers=min(len(chunks), 6)) as executor:
+            graded_results = list(executor.map(grade_chunk, chunks))
+
+        filtered = [c for c in graded_results if c is not None]
         state["filtered_chunks"] = filtered
         if not filtered:
             state["retries"] = state.get("retries", 0) + 1
@@ -213,8 +227,9 @@ class WorkflowNodes:
                             "score": round(r.get("score", 0.90), 2),
                         })
                     web_context = "\n\n".join(web_snippets)
+                    intent = state.get("query_intent", "Fact & Status Lookup")
                     prompt = WEB_SEARCH_GENERATION_PROMPT.format(
-                        question=question, web_context=web_context
+                        intent=intent, question=question, web_context=web_context
                     )
                     response = self._chat_model.invoke(prompt)
                     ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
@@ -226,7 +241,8 @@ class WorkflowNodes:
                 print(f"Tavily search fallback failed: {e}")
 
         # Standard Fallback to LLM general knowledge
-        prompt = FALLBACK_GENERATION_PROMPT.format(question=question)
+        intent = state.get("query_intent", "Educational & Conceptual")
+        prompt = FALLBACK_GENERATION_PROMPT.format(intent=intent, question=question)
         try:
             response = self._chat_model.invoke(prompt)
             ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()

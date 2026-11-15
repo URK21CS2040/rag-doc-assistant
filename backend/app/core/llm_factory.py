@@ -45,22 +45,30 @@ class LLMFactory:
         """
         provider = settings.llm_provider.lower()
         if provider == "groq" or (settings.groq_api_key and not settings.grok_api_key):
+            primary_model = settings.groq_model
+            fallback_1_model = "openai/gpt-oss-120b" if primary_model == "openai/gpt-oss-20b" else "openai/gpt-oss-20b"
             primary = ChatOpenAI(
-                model=settings.groq_model,
+                model=primary_model,
                 temperature=temperature,
                 max_tokens=2500,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            fallback_model = "openai/gpt-oss-20b" if settings.groq_model != "openai/gpt-oss-20b" else "openai/gpt-oss-120b"
-            fallback = ChatOpenAI(
-                model=fallback_model,
+            fallback_1 = ChatOpenAI(
+                model=fallback_1_model,
                 temperature=temperature,
                 max_tokens=2500,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            return primary.with_fallbacks([fallback])
+            fallback_2 = ChatOpenAI(
+                model="qwen/qwen3.8-27b",
+                temperature=temperature,
+                max_tokens=950,
+                api_key=settings.effective_llm_api_key,
+                base_url=settings.groq_base_url,
+            )
+            return primary.with_fallbacks([fallback_1, fallback_2])
         elif provider == "grok" or settings.grok_api_key or settings.xai_api_key:
             return ChatOpenAI(
                 model=settings.grok_model,
