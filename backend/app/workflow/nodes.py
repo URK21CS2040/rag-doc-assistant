@@ -45,6 +45,22 @@ def ensure_complete_ending(text: str) -> str:
     result = "\n".join(lines).strip()
     return result if result else cleaned
 
+
+def remove_answer_labels(text: str) -> str:
+    """
+    Removes the literal label words 'Main Answer:' and 'Detailed Answer:' (including markdown bold markers)
+    from the text while preserving all content and formatting.
+    """
+    if not text:
+        return text
+    # Remove 'Main Answer:' or '**Main Answer:**' at start or line begin
+    cleaned = re.sub(r'(?im)^\s*(?:\*\*)?main\s+answer:?(?:\*\*)?\s*', '', text)
+    # Remove 'Detailed Answer:' or '**Detailed Answer:**'
+    cleaned = re.sub(r'(?im)^\s*(?:\*\*)?detailed\s+answer:?(?:\*\*)?\s*', '', cleaned)
+    # Normalize any excess consecutive newlines to standard double newlines
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
 class WorkflowNodes:
     def __init__(self, vector_store: Any, chat_model: ChatOpenAI) -> None:
         self._vector_store = vector_store
@@ -177,7 +193,7 @@ class WorkflowNodes:
             for c in chunks
         ]
         avg_score = round(sum(c.score for c in chunks) / len(chunks), 3) if chunks else 0.0
-        state["answer"] = ensure_complete_ending(answer)
+        state["answer"] = ensure_complete_ending(remove_answer_labels(answer))
         state["sources"] = sources
         state["relevance_score"] = avg_score
         return state
@@ -274,7 +290,7 @@ class WorkflowNodes:
                     )
                     response = self._chat_model.invoke(prompt)
                     ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
-                    state["answer"] = ensure_complete_ending(ans_text)
+                    state["answer"] = ensure_complete_ending(remove_answer_labels(ans_text))
                     state["sources"] = sources
                     state["relevance_score"] = 0.90
                     return state
@@ -287,7 +303,7 @@ class WorkflowNodes:
         try:
             response = self._chat_model.invoke(prompt)
             ans_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
-            state["answer"] = ensure_complete_ending(ans_text)
+            state["answer"] = ensure_complete_ending(remove_answer_labels(ans_text))
         except Exception:
             state["answer"] = "I am sorry, but I could not find relevant technical documentation in the current index to answer your question."
         state["sources"] = []
