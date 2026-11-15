@@ -18,6 +18,8 @@ SYNONYMS = {
     'hardware': ['cpu', 'memory', 'ram', 'storage', 'ssd', 'requirements', 'minimum'],
     'requirements': ['requirement', 'specifications', 'minimum', 'recommended', 'config'],
     'latency': ['delay', 'timing', 'response', 'seconds', 'event'],
+    'oops': ['object-oriented', 'oop', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
+    'oop': ['object-oriented', 'oops', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
 }
 
 def get_stem(w: str) -> str:
@@ -92,7 +94,7 @@ class ChromaVectorStore:
                 synonym_matched = 0
                 for tok in q_tokens:
                     tok_stem = get_stem(tok)
-                    if tok in doc_lower or (len(tok_stem) >= 4 and tok_stem in doc_lower):
+                    if tok in doc_lower or (len(tok_stem) >= 3 and tok_stem in doc_lower):
                         matched_count += 1
                     elif tok in SYNONYMS:
                         if any(syn in doc_lower for syn in SYNONYMS[tok]):

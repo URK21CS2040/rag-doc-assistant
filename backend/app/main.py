@@ -29,6 +29,7 @@ def get_container() -> Container:
 
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, container: Container = Depends(get_container)) -> QueryResponse:
+    print(f"[QUERY] User question: {request.question}")
     try:
         workflow_service: WorkflowServiceProtocol = container.get_workflow_service()
         result = await workflow_service.run(request.question, request.session_id)

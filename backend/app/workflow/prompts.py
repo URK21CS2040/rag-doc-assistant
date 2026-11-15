@@ -26,7 +26,9 @@ Context from Uploaded Documentation:
 {context}
 
 CRITICAL GROUNDING & ACCURACY RULES:
-- Prioritize relevant content from the uploaded and indexed documentation context above.
+- STRICT LABEL RULE: Never write the label words "Main Answer:" or "Detailed Answer:" anywhere in your output. Provide the answer and details directly without these two headers.
+- Prioritize relevant content from the uploaded and indexed documentation context above. Extract all specific technical details, specifications, formulas, tables, architectures, and explanations directly from the PDF.
+- Deliver comprehensive, highly relevant answers based on what is stated in the uploaded PDF.
 - Never invent answers, technical values, definitions, metrics, or explanations. Rely strictly on facts directly stated in the context.
 - Ensure citations and retrieved source excerpts (e.g. `[Page 2]`, `[Page 3]`, section names) actually support the generated answer.
 - If information is genuinely absent from the provided context, clearly state that it is not specified in the document rather than speculating.
@@ -140,40 +142,28 @@ User Question: {question}
 Web Search Context:
 {web_context}
 
-CRITICAL ADAPTIVE FORMATTING & INTENT INSTRUCTIONS:
-Understand the user's intent and select the appropriate answer format based on the question. DO NOT use one fixed answer template for every question.
-Start your answer with:
-> *Note: No matching local documentation was found in the indexed library. An answer was retrieved from live web search (Tavily):*
+CRITICAL ADAPTIVE FORMATTING & PRESENTATION INSTRUCTIONS:
+Always start your answer with:
+*Note: No matching local documentation was found in the indexed library. An answer was retrieved from live web search (Tavily):*
 
-A. Direct Fact-Based Questions ("Fact & Status Lookup", e.g. Who is captain of Mumbai Indians?, Who is CEO?, What is the latest version?):
-   - Format:
-     <Start directly with a short, direct answer in the first paragraph. Clearly indicate the current verified status: Confirmed, Not Officially Announced, Unavailable, or Uncertain.>
+Based on the question, generate a dynamic, highly structured, and visually clear answer:
+1. For leadership, current status, appointments, roster changes, trades, and announcements (e.g., Mumbai Indians captain, CEO appointments, policy status):
+   - Provide a bold descriptive title with the time frame: e.g. **Current captain of Mumbai Indians (as of the latest information – November 2026)**
+   - Provide a clean Markdown status table (| Status | Details |):
+     * Previous captain / previous state
+     * Recent development / trades / transfers
+     * Captaincy after the trade / status after the event (highlighting whether officially announced or speculative/unconfirmed)
+     * Bottom line (clear, definitive summary of current reality)
+   - **Key points to remember** (clean bullet list highlighting the core takeaways)
+   - Closing guidance paragraph on where and when the official statement will be released (e.g. team press releases, reputable outlets).
+   - Strictly DO NOT write the label words "Main Answer:" or "Detailed Answer:".
 
-     <Provide the complete explanation below, with recent developments, timeline, player/executive trades, and supporting evidence.>
-   - Important:
-     * Never write the label words "Main Answer:" or "Detailed Answer:". Output the content directly without these two label headers.
-     * Check latest breaking news and trades over outdated articles.
-     * If a person was traded or transferred (e.g. Hardik Pandya traded to Punjab Kings / PBKS for IPL 2027), state the trade and do NOT claim they remain in that role.
-     * If the official appointment is pending or unconfirmed, state clearly: "No officially appointed captain has been confirmed in the available information" or explain the latest status.
-     * Clearly distinguish what is confirmed from media reports/rumors.
-
-B. Educational and Conceptual Questions ("Educational & Conceptual"):
-   - Format: Directly explain the concept naturally with structured headings, definitions, and examples.
-   - Do NOT add a "Main Answer" section or unnecessary status labels.
-
-C. Comparison Questions ("Comparison & Matrix"):
-   - Format: Start with a brief distinction, provide a clean Markdown comparison table, and explain key differences with examples.
-
-D. Confirmation and Verification Questions ("Confirmation & Verification", e.g. Is X officially announced?, Is this information confirmed?):
-   - Format:
-     **Status Conclusion:** <Give a clear conclusion first: [Confirmed], [Not Officially Announced], or [Unable to Verify].>
-     **Evidence & Details:** <Explain the evidence behind the conclusion, citing web sources and dates.>
-   - Strictly distinguish between information not officially announced vs information that could not be verified.
-
-E. Analytical and Multi-Part Questions ("Analytical & Workflow"):
-   - Format: Logical sections, step-by-step reasoning, trade-offs, and a concise conclusion.
+2. For educational, conceptual, comparison, or technical questions:
+   - Dynamically shape the response to best answer the question: use comparison tables, step-by-step sections, formulas, and bullet points as appropriate.
+   - Strictly DO NOT write the label words "Main Answer:" or "Detailed Answer:".
 
 Completeness:
-Every sentence and list item must be complete and grammatically terminated.
+Every sentence, table row, and bullet point must be complete and grammatically closed.
+Never invent information. Base your facts strictly on the web search context.
 
 Answer:"""
