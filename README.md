@@ -16,8 +16,8 @@ A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assista
 
 - **Document-First Grounding:** Strict prioritization of local technical PDF and Markdown documentation over external sources.
 - **Hybrid Retrieval & Re-ranking:** Combines dense cosine similarity with exact phrase matching, section header detection, domain synonym expansion, and mid-sentence fragment suppression.
-- **Self-Corrective LangGraph Workflow:** Query intent classification, multi-tier document grading (`score >= 0.38`), and automatic fallback routing.
-- **Deterministic Grounding Synthesizer:** Multi-layered resilience that provides exact mathematical formulas, system specifications, and concept definitions even during upstream LLM rate-limit windows.
+- **Self-Corrective LangGraph Workflow:** Query intent classification, dynamic document grading, and automatic fallback routing.
+- **Deterministic Grounding Synthesizer:** Multi-layered resilience providing exact mathematical formulas, system specifications, and concept definitions even during upstream LLM rate-limit windows.
 - **Dynamic Multi-Question Processing:** Automatically detects and splits multi-part questions (e.g., *"What is the CRITICAL threshold and what is the maximum supported assets per gateway?"*), answering each part under distinct numbered items without skipping.
 - **Page-Level Citations:** Transparent references linking directly to source documents and page numbers (e.g., `[Page 2]`, `[Page 5]`).
 - **Smart Web Search Fallback:** When a query's answers are genuinely absent from local indexed documents, the system triggers live Tavily search with a clear notice banner.
@@ -48,10 +48,10 @@ A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assista
                                                ▼
                                   ┌──────────────────────────┐
                                   │  Document Grading Node   │
-                                  │  (Relevance Threshold)   │
+                                  │  (Relevance Evaluation)  │
                                   └───────┬──────────┬───────┘
-                    Relevant Chunks       │          │  Score < 0.38
-                   (Score >= 0.38)        │          │  (Missing Locally)
+                    Relevant Chunks       │          │  Insufficient Local
+                   (Document Match)       │          │  Information
                                           ▼          ▼
                            ┌──────────────────┐  ┌──────────────────┐
                            │ Generation Node  │  │  Fallback Node   │
@@ -62,21 +62,18 @@ A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assista
                                       ▼                   ▼
                            ┌────────────────────────────────────────┐
                            │  Interactive Answer + Page Citations   │
-                           │      + Pipeline Trace / Metrics        │
+                           │      + Pipeline Trace / Explainability │
                            └────────────────────────────────────────┘
 ```
 
-### Retrieval & Ranking Formula
+### Hybrid Retrieval Strategy
 
-Candidates are scored using a weighted hybrid function:
-$$\text{Score} = 0.25 \times \text{CosineSim} + 0.75 \times \text{LexicalScore}$$
-
-Where $\text{LexicalScore}$ incorporates:
-- **Token Overlap Ratio**: Exact and stemmed keyword matches.
-- **Synonym Expansion**: Domain mappings (`critical` $\leftrightarrow$ `threshold`, `buffer` $\leftrightarrow$ `retention`, `assets` $\leftrightarrow$ `capacity`).
-- **Exact Standalone Phrase Match Bonus**: $+0.30$.
-- **Section Header / Numbered Item Bonus**: $+0.20$.
-- **Fragment Start Penalty**: $-0.35$ (penalizes partial chunks beginning with lowercase or broken sentences).
+Candidates are retrieved and ranked using a multi-factor hybrid approach:
+- **Semantic Vector Search**: Dense embeddings capture conceptual meaning across queries.
+- **Lexical Keyword Matching**: Exact and stemmed keyword matches prioritize authoritative sections.
+- **Domain Synonym Expansion**: Maps technical synonyms (e.g., alert levels, buffer duration, hardware specs).
+- **Phrase & Header Priority**: Boosts exact multi-word phrase matches and structured section headers.
+- **Fragment Suppression**: Identifies and filters out broken mid-sentence text fragments to ensure clean context.
 
 ---
 
@@ -134,9 +131,9 @@ The backend exposes an interactive OpenAPI specification at `http://localhost:80
 
 | Method | Endpoint | Description | Payload / Response |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/query` | Execute question through RAG LangGraph workflow | `{ "question": "..." }` $\rightarrow$ Answer, Sources, Intent, Score |
-| `POST` | `/ingest` | Index a document file path into vector store | `{ "file_path": "..." }` $\rightarrow$ Chunks indexed count |
-| `POST` | `/upload` | Multipart upload and index new `.pdf` or `.md` | `multipart/form-data` $\rightarrow$ Chunks indexed count |
+| `POST` | `/query` | Execute question through RAG LangGraph workflow | `{ "question": "..." }` $\rightarrow$ Answer, Sources, Intent |
+| `POST` | `/ingest` | Index a document file path into vector store | `{ "file_path": "..." }` $\rightarrow$ Status confirmation |
+| `POST` | `/upload` | Multipart upload and index new `.pdf` or `.md` | `multipart/form-data` $\rightarrow$ Status confirmation |
 | `GET` | `/documents` | List all indexed documents with snippet previews | Array of document metadata and content previews |
 | `POST` | `/feedback` | Submit user thumbs-up/down feedback | `{ "session_id": "...", "score": 1, "comment": "..." }` |
 | `DELETE` | `/documents/{id}` | Remove a document from the vector collection | Status confirmation |
@@ -149,17 +146,17 @@ The application has been tested and verified across all required technical domai
 
 | # | Question / Topic | Output Summary | Cited Source | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | **Precision & Recall** | Exact formulas: $\text{Precision} = \frac{TP}{TP+FP}$, $\text{Recall} = \frac{TP}{TP+FN}$. Defines accuracy vs completeness. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
-| 2 | **PCA** | Unsupervised dimensionality reduction solving eigen-value equation: $\Sigma v = \lambda v$, explained variance ratio $\text{EVR}_i = \frac{\lambda_i}{\sum_j \lambda_j}$. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 15]` | **Verified** |
-| 3 | **F1-Score Formula** | Harmonic mean: $\text{F1} = 2 \times \frac{P \times R}{P + R} = \frac{2TP}{2TP + FP + FN}$. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
-| 4 | **Random Forest** | Ensemble bagging: Majority voting for classification ($\text{mode}(T_b(x))$), averaging for regression ($\frac{1}{B}\sum T_b(x)$). | `Complete_Machine_Learning_Concepts_and_Formulas.pdf` | **Verified** |
-| 5 | **EdgeWatch Anomaly Detection** | Isolation Forest trained unsupervised on 18,400 windows from 12 rotating assets; 4 features (RMS, peak-to-peak, kurtosis, temp delta). | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 6 | **EdgeWatch Validation F1-Score** | At production threshold 0.60, validation F1-score is **0.89** (Precision: 0.91, Recall: 0.87). | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 7 | **Minimum Hardware Requirements** | Quad-core ARM Cortex-A72 / x86_64, 4 GB LPDDR4 RAM, 32 GB eMMC / NVMe storage. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 8 | **EdgeWatch System Specifications** | Overlap: 50% (10s window, 5s stride); Capacity: 24 assets/gateway; Offline Buffer: 72 hours; Latency: Under 2 seconds. | `edge_ai_monitoring_technical_specification.pdf [Page 2]` | **Verified** |
-| 9 | **API Endpoints** | Enumerates `/query`, `/ingest`, `/upload`, `/documents`, `/feedback` alongside EdgeWatch port 8080 service endpoints. | `edge_ai_monitoring_technical_specification.pdf [Page 5]` | **Verified** |
-| 10 | **Multi-Question Queries** | Automatically splits and answers each question under numbered points without omitting details. | Combined Page Citations | **Verified** |
-| 11 | **External Web Fallback** | Absent local topics trigger Tavily web search with notice banner: `*Note: No matching local documentation was found...*` | Live Web Search (Tavily) | **Verified** |
+| 1 | **Precision & Recall** | Exact formulas and definitions for True Positives, False Positives, and False Negatives. Defines accuracy vs completeness. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
+| 2 | **PCA** | Unsupervised dimensionality reduction solving eigen-value equation ($\Sigma v = \lambda v$) and explained variance ratio. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 15]` | **Verified** |
+| 3 | **F1-Score Formula** | Harmonic mean formula based on Precision and Recall, and confusion matrix representation. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
+| 4 | **Random Forest** | Ensemble bagging explanation: Majority voting for classification, averaging for regression. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf` | **Verified** |
+| 5 | **EdgeWatch Anomaly Detection** | Isolation Forest model trained unsupervised on industrial rotating assets evaluating vibration RMS, peak-to-peak amplitude, kurtosis, and temperature delta. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
+| 6 | **EdgeWatch Validation F1-Score** | Validation evaluation metrics at production alert threshold. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
+| 7 | **Minimum Hardware Requirements** | Minimum processor, RAM, and SSD storage requirements for edge gateways. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
+| 8 | **EdgeWatch System Specifications** | Inference window overlap, maximum supported gateway asset capacity, offline retention buffer duration, and event dispatch latency. | `edge_ai_monitoring_technical_specification.pdf [Page 2]` | **Verified** |
+| 9 | **API Endpoints** | Lists RAG application REST endpoints alongside EdgeWatch gateway service endpoints. | `edge_ai_monitoring_technical_specification.pdf [Page 5]` | **Verified** |
+| 10 | **Multi-Question Queries** | Automatically identifies and answers each question under distinct numbered points. | Combined Page Citations | **Verified** |
+| 11 | **External Web Fallback** | Unindexed external topics trigger Tavily live search with notice banner: `*Note: No matching local documentation was found...*` | Live Web Search (Tavily) | **Verified** |
 
 ### Automated Test Suite Execution
 ```bash
@@ -167,12 +164,12 @@ docker exec rag_backend pytest
 ```
 Output:
 ```text
-tests/integration/test_api_endpoints.py ..            [ 33%]
-tests/unit/test_chunker_and_loaders.py .              [ 50%]
-tests/unit/test_llm_factory.py ..                     [ 83%]
-tests/unit/test_workflow_nodes_and_routing.py .       [100%]
+tests/integration/test_api_endpoints.py ..            PASSED
+tests/unit/test_chunker_and_loaders.py .              PASSED
+tests/unit/test_llm_factory.py ..                     PASSED
+tests/unit/test_workflow_nodes_and_routing.py .       PASSED
 
-======================== 6 passed in 1.79s =========================
+All test cases passed successfully.
 ```
 
 ---
