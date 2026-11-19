@@ -48,6 +48,8 @@ htmlcov/
 # Databases & Chroma persistence
 data/chroma/
 backend/data/chroma/
+backend/data/uploads/
+data/uploads/
 *.db
 *.sqlite
 *.sqlite3

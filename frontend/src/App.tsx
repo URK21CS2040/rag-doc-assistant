@@ -22,9 +22,10 @@ import {
   ChevronRight,
   Lightbulb,
   Compass,
-  Search
+  Search,
+  Trash2
 } from 'lucide-react';
-import { submitQuery, fetchDocuments, submitFeedback, ingestSamples, uploadDocument } from './api/client';
+import { submitQuery, fetchDocuments, submitFeedback, ingestSamples, uploadDocument, deleteDocument } from './api/client';
 import { SourceCitation, DocumentItem } from './types/api';
 import { MarkdownView } from './components/MarkdownView';
 
@@ -33,6 +34,7 @@ interface Message {
   content: string;
   sources?: SourceCitation[];
   retries?: number;
+  route?: string;
   relevance_score?: number;
   query_intent?: string;
   rewritten_query?: string;
@@ -67,7 +69,8 @@ function ExplainabilityDrawer({
   relevanceScore,
   retries,
   sourcesCount,
-  isWebFallback
+  isWebFallback,
+  route
 }: {
   intent?: string;
   rewrittenQuery?: string;
@@ -75,6 +78,7 @@ function ExplainabilityDrawer({
   retries?: number;
   sourcesCount: number;
   isWebFallback: boolean;
+  route?: string;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
@@ -90,6 +94,11 @@ function ExplainabilityDrawer({
           {intent && (
             <span className="bg-indigo-950 text-indigo-300 border border-indigo-800/80 px-2 py-0.5 rounded-full text-[10px] font-mono">
               Intent: {intent}
+            </span>
+          )}
+          {route && (
+            <span className="bg-cyan-950 text-cyan-300 border border-cyan-800/80 px-2 py-0.5 rounded-full text-[10px] font-mono">
+              Route: {route}
             </span>
           )}
         </div>
@@ -126,14 +135,18 @@ function ExplainabilityDrawer({
                 )}
               </div>
               <p className="font-semibold text-slate-200 text-xs">
-                {isWebFallback
+                {route === 'web_search' || isWebFallback
                   ? '🌐 Tavily Live Web Search Fallback'
+                  : route === 'not_found'
+                  ? '🛑 Document Search (Not Found - Strict Grounding)'
+                  : route === 'general_knowledge'
+                  ? '🧠 Groq LLM General Technical Knowledge'
                   : sourcesCount > 0
                   ? '📁 ChromaDB Vector Knowledge Store'
-                  : '🧠 Groq LLM General Technical Knowledge'}
+                  : '📁 Direct Document Pipeline'}
               </p>
               <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                {retries && retries > 0
+                {retries && retries > 0 && retries < 10
                   ? `Self-corrected with ${retries} query rewrite loop(s) before routing.`
                   : relevanceScore !== undefined && relevanceScore > 0
                   ? `Document relevance passed validation threshold with ${(relevanceScore * 100).toFixed(0)}% confidence.`
@@ -167,6 +180,7 @@ export default function App(): React.JSX.Element {
   const [input, setInput] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState<string>('all');
   const [sessionId] = useState<string>(() => Math.random().toString(36.25));
   const [feedbackStatus, setFeedbackStatus] = useState<string>('');
   const [ingesting, setIngesting] = useState<boolean>(false);
@@ -212,14 +226,29 @@ export default function App(): React.JSX.Element {
     try {
       const res = await uploadDocument(file);
       setIngestStatus(`Success! Indexed ${res.chunks_indexed} chunks from ${file.name}.`);
+      setSelectedDocId(file.name);
       loadDocuments();
       setTimeout(() => setIngestStatus(''), 5000);
-    } catch {
-      setIngestStatus('Upload failed. Please check file format.');
-      setTimeout(() => setIngestStatus(''), 4000);
+    } catch (err: any) {
+      const msg = err?.message || 'Upload failed. Please check file format.';
+      setIngestStatus(`Upload error: ${msg}`);
+      setTimeout(() => setIngestStatus(''), 6000);
     } finally {
       setIngesting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteDocument = async (docId: string, title: string): Promise<void> => {
+    if (!window.confirm(`Are you sure you want to delete "${title}"?`)) return;
+    try {
+      await deleteDocument(docId);
+      setIngestStatus(`Deleted ${title}`);
+      loadDocuments();
+      setTimeout(() => setIngestStatus(''), 3000);
+    } catch (err: any) {
+      setIngestStatus(`Failed to delete: ${err?.message || 'Error'}`);
+      setTimeout(() => setIngestStatus(''), 4000);
     }
   };
 
@@ -231,7 +260,8 @@ export default function App(): React.JSX.Element {
     setLoading(true);
 
     try {
-      const res = await submitQuery(userQuestion, sessionId);
+      const docFilter = selectedDocId === 'all' ? undefined : [selectedDocId];
+      const res = await submitQuery(userQuestion, sessionId, docFilter);
       setMessages((prev) => [
         ...prev,
         {
@@ -239,6 +269,7 @@ export default function App(): React.JSX.Element {
           content: res.answer,
           sources: res.sources,
           retries: res.retries,
+          route: res.route,
           relevance_score: res.relevance_score,
           query_intent: res.query_intent,
           rewritten_query: res.rewritten_query
@@ -340,15 +371,44 @@ export default function App(): React.JSX.Element {
           )}
 
           <div className="space-y-2">
-            {documents.map((doc) => (
-              <div key={doc.id} className="p-2.5 bg-slate-800/70 hover:bg-slate-800 rounded-lg border border-slate-700/80 transition-colors">
-                <div className="flex items-center gap-2 font-medium text-xs text-indigo-300 mb-1">
-                  <FileText className="w-3.5 h-3.5 flex-shrink-0 text-indigo-400" />
-                  <span className="truncate font-mono" title={doc.title}>{doc.title}</span>
+            {documents.map((doc) => {
+              const isSelected = selectedDocId === doc.id || selectedDocId === doc.title;
+              return (
+                <div
+                  key={doc.id}
+                  onClick={() => setSelectedDocId(isSelected ? 'all' : doc.id)}
+                  className={`p-2.5 rounded-lg border transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-950/70 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
+                      : 'bg-slate-800/70 hover:bg-slate-800 border-slate-700/80'
+                  }`}
+                  title={isSelected ? "Click to search all documents" : `Click to isolate queries to "${doc.title}"`}
+                >
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <div className="flex items-center gap-2 font-medium text-xs text-indigo-300 min-w-0 flex-1">
+                      <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-indigo-300' : 'text-indigo-400'}`} />
+                      <span className="truncate font-mono" title={doc.title}>{doc.title}</span>
+                    </div>
+                    {isSelected && (
+                      <span className="text-[9px] uppercase tracking-wider font-semibold bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/40">
+                        Active
+                      </span>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteDocument(doc.id, doc.title);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/50 rounded-md transition-all flex-shrink-0 border border-slate-700/50 hover:border-rose-700/60"
+                      title={`Delete "${doc.title}"`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">{doc.content_preview}</p>
                 </div>
-                <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">{doc.content_preview}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </aside>
@@ -451,6 +511,7 @@ export default function App(): React.JSX.Element {
                         retries={msg.retries}
                         sourcesCount={msg.sources ? msg.sources.length : 0}
                         isWebFallback={isWebFallback}
+                        route={msg.route}
                       />
 
                       {/* Sources Section */}
@@ -593,6 +654,25 @@ export default function App(): React.JSX.Element {
 
         {/* Input Footer */}
         <footer className="p-4 border-t border-slate-800/80 bg-slate-900/60 backdrop-blur-sm">
+          {documents.length > 0 && (
+            <div className="flex items-center gap-2 mb-2.5 max-w-4xl mx-auto text-xs text-slate-400">
+              <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                <BookOpen className="w-3 h-3 text-indigo-400" /> Filter Document:
+              </span>
+              <select
+                value={selectedDocId}
+                onChange={(e) => setSelectedDocId(e.target.value)}
+                className="bg-slate-900 border border-slate-700/80 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="all">All Indexed Documents ({documents.length})</option>
+                {documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.title || doc.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <form onSubmit={handleSend} className="flex gap-3 max-w-4xl mx-auto">
             <input
               type="text"

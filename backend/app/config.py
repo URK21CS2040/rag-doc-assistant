@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     # Groq (GroqCloud - api.groq.com) Configuration - Default LLM
     groq_api_key: Optional[str] = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    groq_model: str = "openai/gpt-oss-120b"
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_fallback_model: str = "qwen/qwen3.8-27b"
 
     # Grok (xAI - api.x.ai) Configuration (also supported)
     grok_api_key: Optional[str] = None
@@ -21,11 +22,20 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_embedding_model: str = "text-embedding-3-small"
 
-    # Tavily Web Search API (bonus fallback when answer is not in documents)
+    # Tavily Web Search API
     tavily_api_key: Optional[str] = None
+
+    # Strict Grounding: if True, refuse out-of-document answers with "This is not covered in the indexed documents."
+    strict_grounding: bool = False
+
+    # Retrieval Configuration
+    top_k: int = 5
 
     # Storage & Application Config
     chroma_persist_directory: str = "./data/chroma"
+    uploads_directory: str = "./data/uploads"
+    sample_directory: str = "./data/sample_docs"
+    feedback_db_path: str = "./data/feedback.db"
     port: int = 8000
     anonymized_telemetry: bool = False
 
@@ -50,5 +60,16 @@ class Settings(BaseSettings):
             or self.groq_api_key
             or "your_embedding_api_key_here"
         )
+
+    def is_valid_tavily_key(self) -> bool:
+        """Check if tavily_api_key is a non-empty, non-placeholder key."""
+        if not self.tavily_api_key:
+            return False
+        key = self.tavily_api_key.strip().strip("'\"")
+        if not key:
+            return False
+        if key.startswith("your_") or key.startswith("tvly-your_") or key.startswith("tvly-placeholder"):
+            return False
+        return True
 
 settings = Settings()

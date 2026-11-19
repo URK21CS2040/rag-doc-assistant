@@ -2,20 +2,31 @@ import { QueryResponse, DocumentListResponse, FeedbackRequest, FeedbackResponse,
 
 const API_BASE = '/api';
 
-export async function submitQuery(question: string, sessionId: string): Promise<QueryResponse> {
+export async function submitQuery(
+  question: string,
+  sessionId: string,
+  documentIds?: string[]
+): Promise<QueryResponse> {
+  const payload: { question: string; session_id: string; document_ids?: string[] } = {
+    question,
+    session_id: sessionId,
+  };
+  if (documentIds && documentIds.length > 0) {
+    payload.document_ids = documentIds;
+  }
+
   const response = await fetch(`${API_BASE}/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, session_id: sessionId })
+    body: JSON.stringify(payload),
   });
+
   if (!response.ok) {
     let msg = 'Failed to fetch query response';
     try {
       const err = await response.json();
       if (err?.detail) msg = err.detail;
-    } catch {
-      // fallback
-    }
+    } catch {}
     throw new Error(msg);
   }
   return response.json();
@@ -33,7 +44,7 @@ export async function submitFeedback(payload: FeedbackRequest): Promise<Feedback
   const response = await fetch(`${API_BASE}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     throw new Error('Failed to submit feedback');
@@ -43,10 +54,15 @@ export async function submitFeedback(payload: FeedbackRequest): Promise<Feedback
 
 export async function ingestSamples(): Promise<IngestResponse> {
   const response = await fetch(`${API_BASE}/ingest/samples`, {
-    method: 'POST'
+    method: 'POST',
   });
   if (!response.ok) {
-    throw new Error('Failed to ingest sample documents');
+    let msg = 'Failed to ingest sample documents';
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = err.detail;
+    } catch {}
+    throw new Error(msg);
   }
   return response.json();
 }
@@ -59,7 +75,27 @@ export async function uploadDocument(file: File): Promise<IngestResponse> {
     body: formData,
   });
   if (!response.ok) {
-    throw new Error('Failed to upload document');
+    let errorMsg = 'Failed to upload document';
+    try {
+      const err = await response.json();
+      if (err?.detail) errorMsg = err.detail;
+    } catch {}
+    throw new Error(errorMsg);
+  }
+  return response.json();
+}
+
+export async function deleteDocument(documentId: string): Promise<{ status: string; document_id: string }> {
+  const response = await fetch(`${API_BASE}/documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    let msg = 'Failed to delete document';
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = err.detail;
+    } catch {}
+    throw new Error(msg);
   }
   return response.json();
 }

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     session_id: Optional[str] = Field(default=None)
+    document_ids: Optional[List[str]] = Field(default=None)
 
 class SourceCitation(BaseModel):
     document_id: str
@@ -14,6 +15,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: List[SourceCitation]
     retries: int
+    route: Optional[str] = Field(default="generation")
     relevance_score: Optional[float] = None
     query_intent: Optional[str] = None
     rewritten_query: Optional[str] = None
@@ -37,6 +39,8 @@ class FeedbackRequest(BaseModel):
     session_id: str
     rating: str = Field(..., pattern="^(thumbs_up|thumbs_down)$")
     comment: Optional[str] = Field(default=None)
+    question: Optional[str] = Field(default=None)
+    answer: Optional[str] = Field(default=None)
 
 class FeedbackResponse(BaseModel):
     status: str

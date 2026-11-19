@@ -1,50 +1,115 @@
 import re
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, Optional
+from pathlib import Path
 import chromadb
-from langchain_openai import OpenAIEmbeddings
+try:
+    from rank_bm25 import BM25Okapi
+    HAS_BM25 = True
+except ImportError:
+    BM25Okapi = None
+    HAS_BM25 = False
 from app.config import settings
 from app.domain.entities import DocumentChunk
 
-STOPWORDS = {
-    'what', 'is', 'the', 'for', 'are', 'a', 'an', 'in', 'of', 'to', 'and', 'or', 'on',
-    'with', 'by', 'at', 'from', 'this', 'that', 'it', 'does', 'how', 'why', 'can',
-    'explain', 'show', 'tell', 'me', 'about', 'do', 'we', 'give', 'list', 'describe'
+logger = logging.getLogger(__name__)
+
+TECHNICAL_SYNONYMS: Dict[str, List[str]] = {
+    "voltage": ["voltage", "v", "dc", "supply"],
+    "voltages": ["voltage", "v", "dc", "supply"],
+    "processor": ["processor", "cpu", "arm", "core", "x86", "x86-64"],
+    "processors": ["processor", "cpu", "arm", "core", "x86", "x86-64"],
+    "cpu": ["cpu", "processor", "core", "architecture"],
+    "ram": ["ram", "memory", "gb"],
+    "memory": ["memory", "ram", "gb"],
+    "storage": ["storage", "ssd", "disk", "gb"],
+    "ssd": ["ssd", "storage", "industrial"],
+    "network": ["network", "ethernet", "wifi", "wi-fi", "interface"],
+    "ethernet": ["ethernet", "network", "interface", "lan"],
+    "temperature": ["temperature", "deg", "c", "operating", "range"],
+    "monitor": ["monitor", "monitored", "assets", "supported", "supervision"],
+    "assets": ["assets", "asset", "monitored", "supported"],
+    "frequency": ["frequency", "hz", "sampling", "samples"],
+    "sampling": ["sampling", "rate", "frequency", "hz", "interval"],
+    "algorithm": ["algorithm", "model", "isolation", "forest"],
+    "model": ["model", "algorithm", "isolation", "forest", "classifier"],
+    "threshold": ["threshold", "warning", "critical", "score", "alert"],
+    "thresholds": ["threshold", "thresholds", "warning", "critical", "score", "alert"],
+    "cache": ["cache", "offline", "buffer", "retention", "hours"],
+    "pilot": ["pilot", "update", "rollout", "duration", "hours", "severity"],
 }
 
-SYNONYMS = {
-    'capacity': ['assets', 'maximum', 'supported', 'limit', 'devices', 'nodes'],
-    'retention': ['buffer', 'hours', 'store', 'storage', 'retention_hours', 'retained'],
-    'buffer': ['retention', 'offline', 'queue', 'hours', 'summaries'],
-    'hardware': ['cpu', 'memory', 'ram', 'storage', 'ssd', 'requirements', 'minimum'],
-    'requirements': ['requirement', 'specifications', 'minimum', 'recommended', 'config'],
-    'latency': ['delay', 'timing', 'response', 'seconds', 'event'],
-    'oops': ['object-oriented', 'oop', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
-    'oop': ['object-oriented', 'oops', 'class', 'classes', 'inheritance', 'polymorphism', 'encapsulation', 'abstraction'],
-    'ml': ['machine learning', 'machine', 'learning', 'supervised', 'unsupervised', 'reinforcement', 'semi-supervised', 'classification', 'regression'],
-    'machine': ['machine learning', 'ml'],
-    'learning': ['supervised', 'unsupervised', 'machine learning', 'reinforcement', 'semi-supervised'],
-    'types': ['type', 'kinds', 'categories', 'classification', 'pillars'],
-    'supervised': ['supervised learning', 'labelled', 'classification', 'regression'],
-    'unsupervised': ['unsupervised learning', 'clustering', 'k-means', 'pca', 'association'],
-    'reinforcement': ['reinforcement learning', 'agent', 'reward', 'actions', 'policy'],
-    'unavailable': ['outage', 'disconnect', 'offline', 'central', 'connectivity', 'failure', 'sync'],
-    'central': ['service', 'sync', 'unavailable', 'centralized', 'cloud'],
-    'critical': ['threshold', 'alert', '0.85', 'warning', 'severity'],
-    'threshold': ['critical', 'warning', '0.85', '0.60', 'cutoff', 'alert'],
-    'overlap': ['window', 'rolling', 'inference', 'stride', '50%', 'seconds'],
-}
-
-def get_stem(w: str) -> str:
-    for suff in ['ation', 'tion', 'ments', 'ment', 'ing', 'ed', 'ies', 'es', 's']:
-        if w.endswith(suff) and len(w) - len(suff) >= 3:
-            return w[:-len(suff)]
-    return w
+def tokenize(text: str) -> List[str]:
+    raw = [t for t in re.findall(r'[a-zA-Z0-9_\-\.]+', text.lower()) if len(t) > 1]
+    expanded = list(raw)
+    for t in raw:
+        syns = TECHNICAL_SYNONYMS.get(t)
+        if syns:
+            expanded.extend(syns)
+    seen = set()
+    return [x for x in expanded if not (x in seen or seen.add(x))]
 
 class ChromaVectorStore:
-    def __init__(self, embeddings: OpenAIEmbeddings) -> None:
+    def __init__(self, embeddings: Any, persist_directory: Optional[str] = None) -> None:
         self._embeddings = embeddings
-        self._client = chromadb.PersistentClient(path=settings.chroma_persist_directory)
-        self._collection = self._client.get_or_create_collection(name="technical_docs")
+        db_path = persist_directory or settings.chroma_persist_directory
+        self._client = chromadb.PersistentClient(path=db_path)
+
+        model_name = getattr(embeddings, "model_name", getattr(embeddings, "model", "default_model"))
+        dim = getattr(embeddings, "dim", 384)
+        safe_model_name = re.sub(r'[^a-zA-Z0-9_-]', '_', model_name)
+        collection_name = f"docs_{safe_model_name}"
+
+        logger.info("Initializing Chroma collection: %s (model: %s, dim: %d)", collection_name, model_name, dim)
+        self._collection = self._client.get_or_create_collection(
+            name=collection_name,
+            metadata={
+                "hnsw:space": "cosine",
+                "embedding_model": str(model_name),
+                "dimension": dim,
+            }
+        )
+
+        # In-memory BM25 index components
+        self._bm25_corpus_ids: List[str] = []
+        self._bm25_corpus_docs: List[DocumentChunk] = []
+        self._bm25_index: Optional[BM25Okapi] = None
+        self._bm25_initialized = False
+
+    def _ensure_bm25_initialized(self) -> None:
+        if self._bm25_initialized:
+            return
+        try:
+            total_count = self._collection.count()
+            if total_count > 0:
+                data = self._collection.get(include=["metadatas", "documents"])
+                if data and data["ids"]:
+                    docs = []
+                    for i in range(len(data["ids"])):
+                        chunk_id = data["ids"][i]
+                        text = data["documents"][i]
+                        meta = data["metadatas"][i] if data["metadatas"] else {}
+                        source = meta.get("source", "unknown")
+                        docs.append(DocumentChunk(
+                            chunk_id=chunk_id,
+                            document_id=source,
+                            text=text,
+                            metadata=meta,
+                            score=0.0
+                        ))
+                    self._rebuild_bm25(docs)
+        except Exception:
+            logger.exception("Failed to initialize BM25 index from collection")
+        self._bm25_initialized = True
+
+    def _rebuild_bm25(self, docs: List[DocumentChunk]) -> None:
+        self._bm25_corpus_docs = docs
+        self._bm25_corpus_ids = [d.chunk_id for d in docs]
+        tokenized_corpus = [tokenize(d.text) for d in docs]
+        if HAS_BM25 and tokenized_corpus and any(len(t) > 0 for t in tokenized_corpus):
+            self._bm25_index = BM25Okapi(tokenized_corpus)
+        else:
+            self._bm25_index = None
 
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         if not chunks:
@@ -53,6 +118,7 @@ class ChromaVectorStore:
         documents = [chunk.text for chunk in chunks]
         metadatas = [chunk.metadata for chunk in chunks]
         embeddings_list = self._embeddings.embed_documents(documents)
+
         self._collection.upsert(
             ids=ids,
             documents=documents,
@@ -60,139 +126,239 @@ class ChromaVectorStore:
             embeddings=embeddings_list
         )
 
-    def delete_document(self, document_id: str) -> None:
-        try:
-            self._collection.delete(where={"source": document_id})
-        except Exception as e:
-            print(f"Error deleting document {document_id}: {e}")
+        self._ensure_bm25_initialized()
+        # Merge new chunks into BM25 corpus and rebuild
+        existing_map = {d.chunk_id: d for d in self._bm25_corpus_docs}
+        for c in chunks:
+            existing_map[c.chunk_id] = c
+        self._rebuild_bm25(list(existing_map.values()))
+        logger.info("Added %d chunks to Chroma and updated BM25 index", len(chunks))
 
-    def similarity_search(self, query: str, k: int = 4) -> List[DocumentChunk]:
+    def delete_document(self, document_id: str) -> None:
+        clean_ids = list(set([document_id, Path(document_id).name]))
+        try:
+            if len(clean_ids) == 1:
+                self._collection.delete(where={"source": clean_ids[0]})
+            else:
+                self._collection.delete(where={"source": {"$in": clean_ids}})
+        except Exception as e:
+            logger.warning("Error deleting document %s from Chroma: %s", document_id, e)
+
+        self._ensure_bm25_initialized()
+        clean_ids_set = set(clean_ids)
+        remaining = [
+            d for d in self._bm25_corpus_docs
+            if d.document_id not in clean_ids_set and d.metadata.get("source") not in clean_ids_set
+        ]
+        self._rebuild_bm25(remaining)
+        logger.info("Deleted document %s from Chroma and BM25 index", document_id)
+
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 5,
+        document_ids: Optional[List[str]] = None
+    ) -> List[DocumentChunk]:
         total_count = self._collection.count()
         if total_count == 0:
             return []
 
-        # Retrieve all documents to prevent HNSW small pool_size from omitting exact keyword matches
-        data = self._collection.get()
-        if not data or not data["ids"]:
-            return []
+        self._ensure_bm25_initialized()
 
-        ids = data["ids"]
-        documents = data["documents"]
-        metadatas = data["metadatas"]
+        # 1. Prepare Chroma where filter for scoped retrieval
+        where_clause = None
+        if document_ids:
+            all_target_ids = []
+            for d in document_ids:
+                d_str = str(d).strip()
+                if not d_str or d_str == "all":
+                    continue
+                bname = Path(d_str).name
+                all_target_ids.extend([
+                    d_str,
+                    bname,
+                    f"/app/data/uploads/{bname}",
+                    f"/app/data/sample_docs/{bname}",
+                    f"data/uploads/{bname}",
+                    f"data/sample_docs/{bname}",
+                    f"./data/uploads/{bname}",
+                    f"./data/sample_docs/{bname}",
+                ])
+            all_target_ids = list(set(all_target_ids))
+            if all_target_ids:
+                if len(all_target_ids) == 1:
+                    where_clause = {"source": all_target_ids[0]}
+                else:
+                    where_clause = {"source": {"$in": all_target_ids}}
 
-        v_id_to_dist = {}
+        # 2. Chroma Dense Search
+        dense_ranks: Dict[str, int] = {}
+        dense_chunk_map: Dict[str, DocumentChunk] = {}
         try:
             query_embedding = self._embeddings.embed_query(query)
-            pool_size = min(max(k * 3, 10), min(25, total_count))
-            vector_res = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=pool_size
-            )
-            if vector_res and vector_res["ids"] and vector_res["ids"][0]:
-                for v_id, v_d in zip(vector_res["ids"][0], vector_res["distances"][0]):
-                    v_id_to_dist[v_id] = v_d
-        except Exception as e:
-            print(f"Vector search exception (falling back to lexical): {e}")
+            n_fetch = min(max(k * 4, 12), total_count)
+            query_kwargs: Dict[str, Any] = {
+                "query_embeddings": [query_embedding],
+                "n_results": n_fetch,
+                "include": ["metadatas", "documents", "distances"],
+            }
+            if where_clause:
+                query_kwargs["where"] = where_clause
 
-        q_clean = query.lower()
-        q_tokens = [w for w in re.findall(r'[a-zA-Z0-9_\-\.%]+', q_clean) if len(w) > 1 and w not in STOPWORDS]
+            vector_res = self._collection.query(**query_kwargs)
+            if vector_res and vector_res["ids"] and vector_res["ids"][0]:
+                for rank, (cid, doc_text, meta, dist) in enumerate(
+                    zip(
+                        vector_res["ids"][0],
+                        vector_res["documents"][0],
+                        vector_res["metadatas"][0],
+                        vector_res["distances"][0],
+                    ),
+                    start=1,
+                ):
+                    dense_ranks[cid] = rank
+                    src = meta.get("source", "unknown") if meta else "unknown"
+                    # Cosine distance to similarity
+                    cos_sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+                    dense_chunk_map[cid] = DocumentChunk(
+                        chunk_id=cid,
+                        document_id=src,
+                        text=doc_text,
+                        metadata=meta or {},
+                        score=cos_sim,
+                    )
+        except Exception:
+            logger.exception("Dense vector search failed")
+
+        # 3. BM25 Lexical Search
+        bm25_ranks: Dict[str, int] = {}
+        bm25_chunk_map: Dict[str, DocumentChunk] = {}
+        q_tokens = tokenize(query)
+
+        if self._bm25_index and q_tokens:
+            eligible_docs = self._bm25_corpus_docs
+            if document_ids:
+                clean_target_bnames = set(Path(d).name for d in document_ids if d and d != "all")
+                if clean_target_bnames:
+                    eligible_docs = [
+                        d for d in self._bm25_corpus_docs
+                        if Path(d.document_id).name in clean_target_bnames or d.document_id in clean_target_bnames
+                    ]
+
+            if eligible_docs:
+                eligible_chunk_ids = {d.chunk_id for d in eligible_docs}
+                scores = self._bm25_index.get_scores(q_tokens)
+                doc_score_pairs = []
+                for idx, d in enumerate(self._bm25_corpus_docs):
+                    if d.chunk_id in eligible_chunk_ids and scores[idx] > 0.0:
+                        doc_score_pairs.append((scores[idx], d))
+
+                doc_score_pairs.sort(key=lambda x: x[0], reverse=True)
+                for rank, (s, d) in enumerate(doc_score_pairs[:k * 4], start=1):
+                    bm25_ranks[d.chunk_id] = rank
+                    bm25_chunk_map[d.chunk_id] = d
+
+        # 4. Reciprocal Rank Fusion (RRF) with exact keyword boost and upload priority
+        all_candidate_ids = set(dense_ranks.keys()).union(set(bm25_ranks.keys()))
+        if not all_candidate_ids:
+            return []
+
+        stopwords = {'what', 'which', 'does', 'standard', 'many', 'have', 'from', 'this', 'that', 'with', 'when', 'where', 'how', 'the', 'is', 'are', 'one', 'can', 'use'}
+        tech_query_words = [w for w in re.findall(r'[a-zA-Z0-9_\-\.]+', query.lower()) if len(w) > 2 and w not in stopwords]
 
         scored_candidates = []
-        for i in range(len(ids)):
-            chunk_id = ids[i]
-            dist = v_id_to_dist.get(chunk_id, 1.0)
-            # Convert vector distance to cosine similarity
-            cos_sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
-            doc_text = documents[i]
-            meta = metadatas[i] if i < len(metadatas) else {}
-            src = meta.get("source", "unknown")
-            doc_lower = doc_text.lower()
-            src_lower = src.lower()
+        for cid in all_candidate_ids:
+            chunk = dense_chunk_map.get(cid) or bm25_chunk_map.get(cid)
+            if not chunk:
+                continue
 
-            if not q_tokens:
-                hybrid_score = cos_sim
-            else:
-                matched_count = 0
-                synonym_matched = 0
-                for tok in q_tokens:
-                    tok_stem = get_stem(tok)
-                    if tok in doc_lower or (len(tok_stem) >= 3 and tok_stem in doc_lower):
-                        matched_count += 1
-                    elif tok in SYNONYMS:
-                        if any(syn in doc_lower for syn in SYNONYMS[tok]):
-                            synonym_matched += 1
+            rrf_score = 0.0
+            if cid in dense_ranks:
+                rrf_score += 1.0 / (60.0 + dense_ranks[cid])
+            if cid in bm25_ranks:
+                rrf_score += 1.25 / (60.0 + bm25_ranks[cid])  # BM25 boosted for technical precision
 
-                token_ratio = (matched_count + 0.8 * synonym_matched) / len(q_tokens)
+            # Prioritize uploaded documents over sample documents
+            is_upload = "uploads" in chunk.document_id or "/uploads" in chunk.document_id
+            if is_upload:
+                rrf_score += 0.006
 
-                # Check multi-token phrase match
-                phrase_match = False
-                exact_standalone_phrase = False
-                for p_idx in range(len(q_tokens) - 1):
-                    phrase = f"{q_tokens[p_idx]} {q_tokens[p_idx + 1]}"
-                    if phrase in doc_lower:
-                        phrase_match = True
-                        if re.search(r'(?<![a-zA-Z\-])' + re.escape(phrase) + r'(?![a-zA-Z\-])', doc_lower):
-                            exact_standalone_phrase = True
-                        break
+            # Exact keyword match bonus
+            c_text_lower = chunk.text.lower()
+            matched_kws = sum(1 for w in tech_query_words if w in c_text_lower)
+            kw_ratio = (matched_kws / len(tech_query_words)) if tech_query_words else 0.0
+            rrf_score += (kw_ratio * 0.008)
 
-                # Check if chunk contains a direct section header or numbered item matching the query
-                header_match = False
-                for tok in q_tokens:
-                    if len(tok) >= 4 and re.search(r'(?m)^[0-9#\.\s*_-]+' + re.escape(tok), doc_lower):
-                        header_match = True
-                        break
+            normalized_score = min(1.0, rrf_score / (2.25 / 61.0))
 
-                source_match = any(tok in src_lower for tok in q_tokens if len(tok) > 3)
-                entity_match = any(tok in doc_lower for tok in q_tokens if len(tok) >= 5 and tok not in STOPWORDS)
-                is_fragment_start = bool(re.match(r'^\s*[a-z]', doc_text))
-
-                if token_ratio == 0 and not phrase_match and not source_match:
-                    hybrid_score = (cos_sim * 0.35) if chunk_id in v_id_to_dist else 0.0
-                else:
-                    lex_score = token_ratio * 0.65
-                    if exact_standalone_phrase:
-                        lex_score += 0.30
-                    elif phrase_match:
-                        lex_score += 0.15
-
-                    if header_match:
-                        lex_score += 0.20
-                    if source_match:
-                        lex_score += 0.15
-                    elif entity_match:
-                        lex_score += 0.05
-
-                    if is_fragment_start:
-                        lex_score -= 0.35
-
-                    hybrid_score = 0.25 * cos_sim + 0.75 * min(1.0, max(0.0, lex_score))
-
-            final_score = round(min(0.98, max(0.0, hybrid_score)), 3)
-            if final_score > 0.05:
-                scored_candidates.append(
-                    (
-                        final_score,
-                        DocumentChunk(
-                            chunk_id=chunk_id,
-                            document_id=src,
-                            text=doc_text,
-                            metadata=meta,
-                            score=final_score
-                        )
-                    )
+            scored_candidates.append(
+                DocumentChunk(
+                    chunk_id=chunk.chunk_id,
+                    document_id=chunk.document_id,
+                    text=chunk.text,
+                    metadata=chunk.metadata,
+                    score=round(normalized_score, 3),
                 )
+            )
 
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        return [chunk for _, chunk in scored_candidates[:k]]
+        scored_candidates.sort(key=lambda x: x.score, reverse=True)
+        top_candidates = scored_candidates[:k]
+
+        # 5. Two-phase candidate addition: Prioritize top scored candidates from all pages first
+        final_chunks: List[DocumentChunk] = []
+        seen_chunk_ids: Set[str] = set()
+
+        for cand in top_candidates:
+            if cand.chunk_id not in seen_chunk_ids:
+                seen_chunk_ids.add(cand.chunk_id)
+                final_chunks.append(cand)
+
+        # Then expand immediate adjacent neighbors (abs(index_diff) == 1) on the same page if capacity allows
+        if self._bm25_corpus_docs and len(final_chunks) < k:
+            for cand in top_candidates:
+                if len(final_chunks) >= k:
+                    break
+                cand_page = cand.metadata.get("page")
+                cand_idx = cand.metadata.get("chunk_index")
+                cand_bname = Path(cand.document_id).name
+                if cand_page is not None and cand_idx is not None:
+                    for neighbor in self._bm25_corpus_docs:
+                        if len(final_chunks) >= k:
+                            break
+                        n_page = neighbor.metadata.get("page")
+                        n_idx = neighbor.metadata.get("chunk_index")
+                        n_bname = Path(neighbor.document_id).name
+                        if (
+                            neighbor.chunk_id not in seen_chunk_ids
+                            and n_bname == cand_bname
+                            and n_page == cand_page
+                            and n_idx is not None
+                            and abs(n_idx - cand_idx) == 1
+                        ):
+                            seen_chunk_ids.add(neighbor.chunk_id)
+                            final_chunks.append(
+                                DocumentChunk(
+                                    chunk_id=neighbor.chunk_id,
+                                    document_id=neighbor.document_id,
+                                    text=neighbor.text,
+                                    metadata=neighbor.metadata,
+                                    score=round(cand.score * 0.95, 3),
+                                )
+                            )
+
+        return final_chunks[:k]
 
     def get_all_documents(self) -> List[Dict[str, Any]]:
-        data = self._collection.get()
+        total_count = self._collection.count()
+        if total_count == 0:
+            return []
+        data = self._collection.get(include=["metadatas", "documents"])
         if not data or not data["ids"]:
             return []
 
         doc_map: Dict[str, str] = {}
         for i, meta in enumerate(data["metadatas"]):
-            source = meta.get("source", "unknown")
+            source = meta.get("source", "unknown") if meta else "unknown"
             if source not in doc_map:
                 doc_map[source] = data["documents"][i][:150]
 
@@ -200,7 +366,7 @@ class ChromaVectorStore:
         for source, preview in doc_map.items():
             items.append({
                 "id": source,
-                "title": source,
-                "content_preview": preview
+                "title": Path(source).name,
+                "content_preview": preview,
             })
         return items

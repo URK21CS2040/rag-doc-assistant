@@ -1,14 +1,25 @@
 import hashlib
+import logging
 from typing import Any, List
 import numpy as np
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
+try:
+    from fastembed import TextEmbedding
+    HAS_FASTEMBED = True
+except ImportError:
+    TextEmbedding = None
+    HAS_FASTEMBED = False
+
+
 class LocalHashEmbeddings:
     """
     Deterministic n-gram feature hashing embeddings.
     Zero external dependencies, instant execution, and offline-compatible.
-    Used automatically when Groq is the primary LLM and no external embedding API key is provided.
+    Used when FastEmbed is unavailable and no OpenAI key is provided.
     """
     def __init__(self, dim: int = 384) -> None:
         self.dim = dim
@@ -36,50 +47,79 @@ class LocalHashEmbeddings:
     def embed_query(self, text: str) -> List[float]:
         return self._embed_single(text)
 
+
+class FastEmbedEmbeddings:
+    """
+    Local semantic embeddings using BAAI/bge-small-en-v1.5 via fastembed.
+    Fast, offline-capable, real semantic vector representation (384-dim).
+    """
+    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
+        self.model_name = model_name
+        self.dim = 384
+        logger.info("Initializing FastEmbedEmbeddings with model: %s", model_name)
+        self._model = TextEmbedding(model_name=model_name)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        embeddings = list(self._model.embed(texts))
+        return [e.tolist() for e in embeddings]
+
+    def embed_query(self, text: str) -> List[float]:
+        embeddings = list(self._model.embed([text]))
+        if not embeddings:
+            return [0.0] * self.dim
+        return embeddings[0].tolist()
+
+
 class LLMFactory:
     @staticmethod
-    def create_chat_model(temperature: float = 0.0) -> ChatOpenAI:
+    def create_chat_model(temperature: float = 0.0) -> Any:
         """
-        Creates Groq as the default LLM (GroqCloud with LPU inference).
+        Creates Groq as the default LLM with single fallback model (GroqCloud LPU).
         Also supports Grok (xAI) or OpenAI based on settings.
+        Budgeted timeout: primary 12s, fallback 10s, max 1 retry each (total ~22-25s budget).
         """
         provider = settings.llm_provider.lower()
         if provider == "groq" or (settings.groq_api_key and not settings.grok_api_key):
             primary_model = settings.groq_model
-            fallback_1_model = "qwen/qwen3.8-27b" if primary_model != "qwen/qwen3.8-27b" else "openai/gpt-oss-20b"
-            fallback_2_model = "openai/gpt-oss-120b" if primary_model != "openai/gpt-oss-120b" else "openai/gpt-oss-20b"
+            fallback_model = settings.groq_fallback_model
+
             primary = ChatOpenAI(
                 model=primary_model,
                 temperature=temperature,
-                max_tokens=800,
+                max_tokens=1500,
                 max_retries=1,
-                request_timeout=12.0,
+                request_timeout=20.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            fallback_1 = ChatOpenAI(
-                model=fallback_1_model,
+            fallback1 = ChatOpenAI(
+                model=fallback_model,
                 temperature=temperature,
-                max_tokens=800,
+                max_tokens=1500,
                 max_retries=1,
-                request_timeout=12.0,
+                request_timeout=20.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            fallback_2 = ChatOpenAI(
-                model=fallback_2_model,
+            fallback2 = ChatOpenAI(
+                model="openai/gpt-oss-120b",
                 temperature=temperature,
-                max_tokens=800,
+                max_tokens=1500,
                 max_retries=1,
-                request_timeout=12.0,
+                request_timeout=20.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            return primary.with_fallbacks([fallback_1, fallback_2])
+            return primary.with_fallbacks([fallback1, fallback2])
         elif provider == "grok" or settings.grok_api_key or settings.xai_api_key:
             return ChatOpenAI(
                 model=settings.grok_model,
                 temperature=temperature,
+                max_tokens=1500,
+                max_retries=1,
+                request_timeout=15.0,
                 api_key=settings.grok_api_key or settings.xai_api_key or settings.effective_llm_api_key,
                 base_url=settings.grok_base_url,
             )
@@ -87,6 +127,9 @@ class LLMFactory:
             return ChatOpenAI(
                 model="gpt-4o-mini",
                 temperature=temperature,
+                max_tokens=1500,
+                max_retries=1,
+                request_timeout=15.0,
                 api_key=settings.openai_api_key or settings.effective_llm_api_key,
             )
 
@@ -94,20 +137,16 @@ class LLMFactory:
     def create_embeddings() -> Any:
         """
         Creates embeddings client.
-        Uses OpenAI if OPENAI_API_KEY is configured.
-        Uses Grok if GROK_API_KEY is configured.
-        Otherwise falls back to fast LocalHashEmbeddings for seamless Groq operation.
+        Uses OpenAI if OPENAI_API_KEY is configured and valid.
+        Defaults to local FastEmbedEmbeddings (BAAI/bge-small-en-v1.5) for real semantic retrieval.
         """
-        if settings.openai_api_key and settings.openai_api_key.startswith("sk-"):
+        if settings.openai_api_key and settings.openai_api_key.startswith("sk-") and not settings.openai_api_key.startswith("sk-your"):
+            logger.info("Using OpenAIEmbeddings: %s", settings.openai_embedding_model)
             return OpenAIEmbeddings(
                 model=settings.openai_embedding_model,
                 api_key=settings.openai_api_key,
             )
-        if settings.grok_api_key and settings.grok_api_key.startswith("xai-"):
-            return OpenAIEmbeddings(
-                model=settings.grok_embedding_model,
-                api_key=settings.grok_api_key,
-                base_url=settings.grok_base_url,
-            )
-        # Default for Groq: local zero-cost embedding
+        if HAS_FASTEMBED:
+            return FastEmbedEmbeddings()
+        logger.warning("fastembed is not installed in current environment; falling back to LocalHashEmbeddings")
         return LocalHashEmbeddings()

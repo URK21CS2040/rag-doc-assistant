@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from typing import List
 from app.domain.entities import DocumentChunk
 
@@ -8,7 +9,7 @@ class TextChunker:
     Splits text along natural structural boundaries (paragraphs, lines, sentences, words)
     while preserving page numbers and table integrity.
     """
-    def __init__(self, chunk_size: int = 1200, chunk_overlap: int = 200) -> None:
+    def __init__(self, chunk_size: int = 1400, chunk_overlap: int = 300) -> None:
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
 
@@ -16,6 +17,8 @@ class TextChunker:
         chunks: List[DocumentChunk] = []
         if not text or not text.strip():
             return chunks
+
+        doc_name = Path(document_id).name
 
         # Detect page boundaries (e.g. '--- Page 1 ---')
         page_pattern = r'(--- Page \d+ ---)'
@@ -38,7 +41,7 @@ class TextChunker:
                             chunk_id=f"{document_id}_p{page_num}_c0",
                             document_id=document_id,
                             text=full_chunk_text,
-                            metadata={"source": document_id, "page": page_num}
+                            metadata={"source": document_id, "document_name": doc_name, "page": page_num, "chunk_index": 0}
                         )
                     )
                 else:
@@ -52,7 +55,7 @@ class TextChunker:
                                 chunk_id=f"{document_id}_p{page_num}_c{sub_idx}",
                                 document_id=document_id,
                                 text=sub_text,
-                                metadata={"source": document_id, "page": page_num}
+                                metadata={"source": document_id, "document_name": doc_name, "page": page_num, "chunk_index": sub_idx}
                             )
                         )
         else:
@@ -64,7 +67,7 @@ class TextChunker:
                         chunk_id=f"{document_id}_chunk_{idx}",
                         document_id=document_id,
                         text=sub_text,
-                        metadata={"source": document_id}
+                        metadata={"source": document_id, "document_name": doc_name, "chunk_index": idx}
                     )
                 )
 
