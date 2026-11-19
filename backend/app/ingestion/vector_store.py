@@ -156,7 +156,7 @@ class ChromaVectorStore:
     def similarity_search(
         self,
         query: str,
-        k: int = 5,
+        k: int = 8,
         document_ids: Optional[List[str]] = None
     ) -> List[DocumentChunk]:
         total_count = self._collection.count()

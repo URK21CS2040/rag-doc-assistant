@@ -1,8 +1,11 @@
 import asyncio
+import logging
 from typing import Dict, Any, Optional, List
 from langgraph.graph import StateGraph, END
 from app.workflow.state import GraphState
 from app.workflow.nodes import WorkflowNodes
+
+logger = logging.getLogger(__name__)
 
 class WorkflowService:
     def __init__(self, vector_store: Any, chat_model: Any) -> None:
@@ -35,9 +38,45 @@ class WorkflowService:
 
         # Loop query_rewrite back into retrieval
         workflow.add_edge("query_rewrite", "retrieval")
-        workflow.add_edge("generation", END)
+
+        # Grounding & hallucination check edge: if LLM states information is not covered, route to fallback (Tavily)
+        workflow.add_conditional_edges(
+            "generation",
+            self._decide_after_generation,
+            {
+                "fallback": "fallback",
+                "end": END,
+            }
+        )
         workflow.add_edge("fallback", END)
         return workflow.compile()
+
+    def _decide_after_generation(self, state: GraphState) -> str:
+        answer = state.get("answer", "").strip().lower()
+        sources = state.get("sources", [])
+
+        # Sentinels indicating that the LLM concluded the documents do not cover the answer
+        refusal_markers = [
+            "not covered in the provided documentation",
+            "not covered in the indexed",
+            "not mentioned in the provided",
+            "cannot be found in the provided",
+            "cannot be found in the uploaded",
+            "not contain information about",
+            "does not mention",
+            "not provide information about",
+        ]
+        is_refusal = any(marker in answer for marker in refusal_markers)
+        if is_refusal:
+            logger.info("Generation concluded answer is not covered in local documents. Triggering fallback.")
+            return "fallback"
+
+        # Ungrounded check: If generation produced text but has 0 supporting citations/sources
+        if not sources and state.get("route") == "generation":
+            logger.info("Generation produced ungrounded answer without valid citations. Triggering fallback.")
+            return "fallback"
+
+        return "end"
 
     def _decide_next_node(self, state: GraphState) -> str:
         filtered = state.get("filtered_chunks", [])

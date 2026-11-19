@@ -23,7 +23,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - CHROMA_PERSIST_DIRECTORY=/app/data/chroma
-      - TOP_K=${TOP_K:-5}
+      - TOP_K=${TOP_K:-8}
       - ANONYMIZED_TELEMETRY=False
     volumes:
       - ./backend:/app

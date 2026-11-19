@@ -96,15 +96,26 @@ class WorkflowNodes:
                 for d in available_docs:
                     doc_title = d.get("title", "").lower()
                     doc_stem = Path(doc_title).stem.lower()
+
                     if doc_title in eff_lower or doc_stem in eff_lower:
                         matching_docs.append(d["id"])
                     elif ("aerosense" in eff_lower or "as-ts-204" in eff_lower) and "technical_rag_test" in doc_title:
                         matching_docs.append(d["id"])
                     elif ("edgewatch" in eff_lower or "eam-ts-004" in eff_lower) and "edge_ai" in doc_title:
                         matching_docs.append(d["id"])
+                    else:
+                        # Fuzzy match on uploaded document titles: require >= 2 significant title words
+                        title_tokens = [
+                            w for w in re.findall(r'[a-zA-Z0-9]+', doc_stem)
+                            if len(w) >= 4 and w not in CONVERSATIONAL_STOPWORDS and w not in {'technical', 'specification', 'document', 'file', 'data'}
+                        ]
+                        if title_tokens:
+                            matched_tokens = sum(1 for w in title_tokens if re.search(r'\b' + re.escape(w) + r'\b', eff_lower))
+                            if matched_tokens >= 2 or (len(title_tokens) == 1 and matched_tokens == 1):
+                                matching_docs.append(d["id"])
 
                 if matching_docs:
-                    logger.info("Auto-scoped question to targeted document: %s", matching_docs)
+                    logger.info("Auto-scoped question to targeted document(s): %s", matching_docs)
                     state["document_ids"] = matching_docs
             except Exception:
                 logger.debug("Failed auto-scoping document in query_analysis_node")
@@ -145,10 +156,12 @@ class WorkflowNodes:
         )
 
         relevant_indices: Set[int] = set()
+        llm_called_successfully = False
         try:
             response = self._chat_model.invoke(prompt)
             resp_content = response.content.strip() if hasattr(response, "content") else str(response).strip()
             logger.info("Batch grading decision: %s", resp_content)
+            llm_called_successfully = True
             if "none" not in resp_content.lower():
                 matches = re.findall(r'\b\d+\b', resp_content)
                 for m in matches:
@@ -158,15 +171,22 @@ class WorkflowNodes:
         except Exception:
             logger.exception("LLM grading invocation failed")
 
-        # Deterministic keyword & technical match protection:
-        # Chunks containing multiple core query keywords must never be discarded
-        q_words = [w for w in re.findall(r'[a-zA-Z0-9_\-\.]+', question.lower())
-                   if len(w) > 2 and w not in CONVERSATIONAL_STOPWORDS]
-        for idx, c in enumerate(chunks, 1):
-            c_lower = c.text.lower()
-            matched_count = sum(1 for w in q_words if re.search(r'\b' + re.escape(w) + r'\b', c_lower))
-            if q_words and (matched_count >= 2 or (matched_count >= 1 and len(q_words) == 1)):
-                relevant_indices.add(idx)
+        # Deterministic keyword protection:
+        # If the LLM grader successfully graded and returned "NONE", TRUST the LLM grader.
+        # Fall back to keyword protection ONLY if the LLM call failed or threw an exception,
+        # requiring >= 2 distinct domain-specific words (length >= 5), excluding boilerplate headers.
+        doc_boilerplate = {'aerosense', 'edgewatch', 'specification', 'system', 'technical', 'version', 'document', 'page'}
+        q_words = [
+            w for w in re.findall(r'[a-zA-Z0-9_\-\.]+', question.lower())
+            if len(w) >= 4 and w not in CONVERSATIONAL_STOPWORDS and w not in doc_boilerplate
+        ]
+
+        if not llm_called_successfully:
+            for idx, c in enumerate(chunks, 1):
+                c_lower = c.text.lower()
+                matched_count = sum(1 for w in q_words if len(w) >= 5 and re.search(r'\b' + re.escape(w) + r'\b', c_lower))
+                if len(q_words) >= 2 and matched_count >= 2:
+                    relevant_indices.add(idx)
 
         # Document Isolation: If question specifically targeted a document, filter out unrelated documents
         target_doc_ids = state.get("document_ids")
