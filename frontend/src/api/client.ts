@@ -1,4 +1,4 @@
-import { QueryResponse, DocumentListResponse, FeedbackRequest, FeedbackResponse, IngestResponse } from '../types/api';
+import { QueryResponse, DocumentListResponse, FeedbackRequest, FeedbackResponse, IngestResponse, UrlIngestResponse } from '../types/api';
 
 const API_BASE = '/api';
 
@@ -85,12 +85,50 @@ export async function uploadDocument(file: File): Promise<IngestResponse> {
   return response.json();
 }
 
+export async function ingestUrl(url: string): Promise<UrlIngestResponse> {
+  const response = await fetch(`${API_BASE}/ingest/url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!response.ok) {
+    let errorMsg = 'Failed to index URL';
+    try {
+      const err = await response.json();
+      if (err?.detail) errorMsg = err.detail;
+    } catch {}
+    throw new Error(errorMsg);
+  }
+  return response.json();
+}
+
 export async function deleteDocument(documentId: string): Promise<{ status: string; document_id: string }> {
-  const response = await fetch(`${API_BASE}/documents/${encodeURIComponent(documentId)}`, {
+  // If it's a URL, pass via query parameter to prevent slash mangling in path routing
+  const isUrl = documentId.startsWith('http://') || documentId.startsWith('https://');
+  const endpoint = isUrl
+    ? `${API_BASE}/documents?document_id=${encodeURIComponent(documentId)}`
+    : `${API_BASE}/documents/${encodeURIComponent(documentId.split('/').pop() || documentId)}`;
+
+  const response = await fetch(endpoint, {
     method: 'DELETE',
   });
   if (!response.ok) {
     let msg = 'Failed to delete document';
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = err.detail;
+    } catch {}
+    throw new Error(msg);
+  }
+  return response.json();
+}
+
+export async function deleteAllDocuments(): Promise<{ status: string; message: string; files_deleted: number; chunks_deleted: number }> {
+  const response = await fetch(`${API_BASE}/documents`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    let msg = 'Failed to delete all documents';
     try {
       const err = await response.json();
       if (err?.detail) msg = err.detail;

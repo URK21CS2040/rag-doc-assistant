@@ -47,3 +47,14 @@ export interface IngestResponse {
   status: string;
   chunks_indexed: number;
 }
+
+export interface UrlIngestRequest {
+  url: string;
+}
+
+export interface UrlIngestResponse {
+  status: string;
+  chunks_indexed: number;
+  url: string;
+  title: string;
+}

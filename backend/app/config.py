@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     strict_grounding: bool = False
 
     # Retrieval Configuration
-    top_k: int = 8
+    top_k: int = 7
 
     # Storage & Application Config
     chroma_persist_directory: str = "./data/chroma"

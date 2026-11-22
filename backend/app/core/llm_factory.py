@@ -88,38 +88,39 @@ class LLMFactory:
             primary = ChatOpenAI(
                 model=primary_model,
                 temperature=temperature,
-                max_tokens=1500,
-                max_retries=2,
-                request_timeout=20.0,
+                max_tokens=3000,
+                max_retries=1,
+                request_timeout=30.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
             fallback1 = ChatOpenAI(
                 model=fallback_model,
                 temperature=temperature,
-                max_tokens=1500,
-                max_retries=2,
-                request_timeout=20.0,
+                max_tokens=2500,
+                max_retries=1,
+                request_timeout=30.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
             fallback2 = ChatOpenAI(
                 model="openai/gpt-oss-120b",
                 temperature=temperature,
-                max_tokens=1500,
-                max_retries=2,
-                request_timeout=20.0,
+                max_tokens=3000,
+                max_retries=1,
+                request_timeout=35.0,
                 api_key=settings.effective_llm_api_key,
                 base_url=settings.groq_base_url,
             )
-            return primary.with_fallbacks([fallback1, fallback2])
+            runnable = primary.with_fallbacks([fallback1, fallback2])
+            return runnable
         elif provider == "grok" or settings.grok_api_key or settings.xai_api_key:
             return ChatOpenAI(
                 model=settings.grok_model,
                 temperature=temperature,
-                max_tokens=1500,
+                max_tokens=2000,
                 max_retries=1,
-                request_timeout=15.0,
+                request_timeout=30.0,
                 api_key=settings.grok_api_key or settings.xai_api_key or settings.effective_llm_api_key,
                 base_url=settings.grok_base_url,
             )
@@ -127,9 +128,9 @@ class LLMFactory:
             return ChatOpenAI(
                 model="gpt-4o-mini",
                 temperature=temperature,
-                max_tokens=1500,
+                max_tokens=2000,
                 max_retries=1,
-                request_timeout=15.0,
+                request_timeout=30.0,
                 api_key=settings.openai_api_key or settings.effective_llm_api_key,
             )
 

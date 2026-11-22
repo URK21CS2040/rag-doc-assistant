@@ -3,6 +3,23 @@ import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import chromadb
+from chromadb.config import Settings as ChromaSettings
+
+# Silence broken PostHog telemetry in ChromaDB
+import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+try:
+    import posthog
+    posthog.capture = lambda *args, **kwargs: None
+except Exception:
+    pass
+try:
+    import chromadb.telemetry.product.posthog as chroma_posthog
+    chroma_posthog.Posthog.capture = lambda *args, **kwargs: None
+    chroma_posthog.Posthog._direct_capture = lambda *args, **kwargs: None
+except Exception:
+    pass
+
 try:
     from rank_bm25 import BM25Okapi
     HAS_BM25 = True
@@ -53,7 +70,7 @@ class ChromaVectorStore:
     def __init__(self, embeddings: Any, persist_directory: Optional[str] = None) -> None:
         self._embeddings = embeddings
         db_path = persist_directory or settings.chroma_persist_directory
-        self._client = chromadb.PersistentClient(path=db_path)
+        self._client = chromadb.PersistentClient(path=db_path, settings=ChromaSettings(anonymized_telemetry=False, is_persistent=True))
 
         model_name = getattr(embeddings, "model_name", getattr(embeddings, "model", "default_model"))
         dim = getattr(embeddings, "dim", 384)
@@ -135,23 +152,76 @@ class ChromaVectorStore:
         logger.info("Added %d chunks to Chroma and updated BM25 index", len(chunks))
 
     def delete_document(self, document_id: str) -> None:
-        clean_ids = list(set([document_id, Path(document_id).name]))
+        self._ensure_bm25_initialized()
+        doc_id_clean = document_id.strip()
+        target_bname = Path(doc_id_clean).name.lower()
+        clean_ids = list(set([
+            doc_id_clean,
+            doc_id_clean.rstrip('/'),
+            Path(doc_id_clean).name,
+            f"/app/data/uploads/{Path(doc_id_clean).name}",
+            f"./data/uploads/{Path(doc_id_clean).name}",
+            f"data/uploads/{Path(doc_id_clean).name}",
+            f"/app/data/sample_docs/{Path(doc_id_clean).name}",
+            f"./data/sample_docs/{Path(doc_id_clean).name}",
+            f"data/sample_docs/{Path(doc_id_clean).name}",
+        ]))
+
         try:
-            if len(clean_ids) == 1:
-                self._collection.delete(where={"source": clean_ids[0]})
-            else:
-                self._collection.delete(where={"source": {"$in": clean_ids}})
+            total_count = self._collection.count()
+            if total_count > 0:
+                data = self._collection.get(include=["metadatas"])
+                matching_ids = []
+                if data and data["ids"]:
+                    for i, cid in enumerate(data["ids"]):
+                        meta = data["metadatas"][i] if data["metadatas"] else {}
+                        src = str(meta.get("source", "")).strip()
+                        src_bname = Path(src).name.lower()
+                        if (
+                            src == doc_id_clean
+                            or src.rstrip('/') == doc_id_clean.rstrip('/')
+                            or (target_bname and src_bname == target_bname)
+                            or src in clean_ids
+                            or (target_bname and target_bname in src.lower())
+                            or cid.startswith(doc_id_clean)
+                        ):
+                            matching_ids.append(cid)
+                if matching_ids:
+                    self._collection.delete(ids=matching_ids)
+                    logger.info("Deleted %d chunks from Chroma for document '%s'", len(matching_ids), document_id)
+                else:
+                    self._collection.delete(where={"source": {"$in": clean_ids}})
         except Exception as e:
             logger.warning("Error deleting document %s from Chroma: %s", document_id, e)
 
-        self._ensure_bm25_initialized()
-        clean_ids_set = set(clean_ids)
         remaining = [
             d for d in self._bm25_corpus_docs
-            if d.document_id not in clean_ids_set and d.metadata.get("source") not in clean_ids_set
+            if d.document_id != doc_id_clean
+            and d.document_id.rstrip('/') != doc_id_clean.rstrip('/')
+            and d.metadata.get("source") != doc_id_clean
+            and (not target_bname or Path(d.document_id).name.lower() != target_bname)
+            and (not target_bname or Path(d.metadata.get("source", "")).name.lower() != target_bname)
+            and d.document_id not in clean_ids
         ]
         self._rebuild_bm25(remaining)
-        logger.info("Deleted document %s from Chroma and BM25 index", document_id)
+        logger.info("Deleted document %s from Chroma and BM25 index (remaining chunks: %d)", document_id, len(remaining))
+
+    def delete_all_documents(self) -> int:
+        self._ensure_bm25_initialized()
+        total_deleted = 0
+        try:
+            total_count = self._collection.count()
+            if total_count > 0:
+                data = self._collection.get()
+                if data and data["ids"]:
+                    total_deleted = len(data["ids"])
+                    self._collection.delete(ids=data["ids"])
+            logger.info("Deleted all %d chunks from ChromaDB collection", total_deleted)
+        except Exception as e:
+            logger.exception("Error deleting all documents from Chroma: %s", e)
+
+        self._rebuild_bm25([])
+        return total_deleted
 
     def similarity_search(
         self,
@@ -238,11 +308,18 @@ class ChromaVectorStore:
         if self._bm25_index and q_tokens:
             eligible_docs = self._bm25_corpus_docs
             if document_ids:
-                clean_target_bnames = set(Path(d).name for d in document_ids if d and d != "all")
-                if clean_target_bnames:
+                clean_targets = set(
+                    [str(d).strip() for d in document_ids if d and d != "all"]
+                    + [str(d).strip().rstrip('/') for d in document_ids if d and d != "all"]
+                    + [Path(str(d).strip()).name for d in document_ids if d and d != "all"]
+                )
+                if clean_targets:
                     eligible_docs = [
                         d for d in self._bm25_corpus_docs
-                        if Path(d.document_id).name in clean_target_bnames or d.document_id in clean_target_bnames
+                        if d.document_id in clean_targets
+                        or d.document_id.rstrip('/') in clean_targets
+                        or Path(d.document_id).name in clean_targets
+                        or d.metadata.get("source") in clean_targets
                     ]
 
             if eligible_docs:
@@ -263,7 +340,18 @@ class ChromaVectorStore:
         if not all_candidate_ids:
             return []
 
-        stopwords = {'what', 'which', 'does', 'standard', 'many', 'have', 'from', 'this', 'that', 'with', 'when', 'where', 'how', 'the', 'is', 'are', 'one', 'can', 'use'}
+        stopwords = {
+            'what', 'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how',
+            'does', 'do', 'did', 'done', 'doing',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'having',
+            'can', 'could', 'shall', 'should', 'will', 'would', 'may', 'might', 'must',
+            'tell', 'give', 'show', 'explain', 'describe', 'find', 'get', 'know', 'say',
+            'about', 'with', 'from', 'into', 'onto', 'through', 'over', 'under', 'above', 'below',
+            'for', 'and', 'nor', 'but', 'or', 'yet', 'so', 'the', 'a', 'an', 'this', 'that', 'these', 'those',
+            'many', 'much', 'more', 'most', 'some', 'any', 'all', 'few', 'both', 'each', 'every',
+            'between', 'difference', 'according', 'documentation', 'provided'
+        }
         tech_query_words = [w for w in re.findall(r'[a-zA-Z0-9_\-\.]+', query.lower()) if len(w) > 2 and w not in stopwords]
 
         scored_candidates = []
@@ -274,35 +362,38 @@ class ChromaVectorStore:
 
             rrf_score = 0.0
             if cid in dense_ranks:
-                rrf_score += 1.0 / (60.0 + dense_ranks[cid])
+                rrf_score += 1.5 / (60.0 + dense_ranks[cid])  # Prioritize dense semantic retrieval
             if cid in bm25_ranks:
-                rrf_score += 1.25 / (60.0 + bm25_ranks[cid])  # BM25 boosted for technical precision
+                rrf_score += 1.0 / (60.0 + bm25_ranks[cid])
 
             # Prioritize uploaded documents over sample documents
             is_upload = "uploads" in chunk.document_id or "/uploads" in chunk.document_id
             if is_upload:
                 rrf_score += 0.006
 
-            # Exact keyword match bonus
+            # Exact keyword match bonus for technical keywords
             c_text_lower = chunk.text.lower()
             matched_kws = sum(1 for w in tech_query_words if w in c_text_lower)
             kw_ratio = (matched_kws / len(tech_query_words)) if tech_query_words else 0.0
-            rrf_score += (kw_ratio * 0.008)
+            rrf_score += (kw_ratio * 0.010)
 
-            normalized_score = min(1.0, rrf_score / (2.25 / 61.0))
+            # High-resolution normalized score preserving relative ranking
+            normalized_score = round(min(1.0, rrf_score / 0.055), 4)
 
-            scored_candidates.append(
-                DocumentChunk(
-                    chunk_id=chunk.chunk_id,
-                    document_id=chunk.document_id,
-                    text=chunk.text,
-                    metadata=chunk.metadata,
-                    score=round(normalized_score, 3),
-                )
+            cand_obj = DocumentChunk(
+                chunk_id=chunk.chunk_id,
+                document_id=chunk.document_id,
+                text=chunk.text,
+                metadata=chunk.metadata,
+                score=normalized_score,
             )
+            dense_rank = dense_ranks.get(cid, 999)
+            bm25_rank = bm25_ranks.get(cid, 999)
+            scored_candidates.append((rrf_score, -dense_rank, -bm25_rank, cand_obj))
 
-        scored_candidates.sort(key=lambda x: x.score, reverse=True)
-        top_candidates = scored_candidates[:k]
+        # Sort strictly by raw continuous RRF score, breaking any ties by dense rank and BM25 rank
+        scored_candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        top_candidates = [item[3] for item in scored_candidates[:k]]
 
         # 5. Two-phase candidate addition: Prioritize top scored candidates from all pages first
         final_chunks: List[DocumentChunk] = []
@@ -356,17 +447,25 @@ class ChromaVectorStore:
         if not data or not data["ids"]:
             return []
 
-        doc_map: Dict[str, str] = {}
+        doc_map: Dict[str, Dict[str, Any]] = {}
         for i, meta in enumerate(data["metadatas"]):
             source = meta.get("source", "unknown") if meta else "unknown"
             if source not in doc_map:
-                doc_map[source] = data["documents"][i][:150]
+                title = (
+                    (meta.get("title") if meta else None)
+                    or (meta.get("document_name") if meta else None)
+                    or Path(source).name
+                )
+                doc_map[source] = {
+                    "title": title,
+                    "preview": data["documents"][i][:150]
+                }
 
         items: List[Dict[str, Any]] = []
-        for source, preview in doc_map.items():
+        for source, info in doc_map.items():
             items.append({
                 "id": source,
-                "title": Path(source).name,
-                "content_preview": preview,
+                "title": info["title"],
+                "content_preview": info["preview"],
             })
         return items

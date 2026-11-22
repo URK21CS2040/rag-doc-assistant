@@ -25,7 +25,7 @@ import {
   Search,
   Trash2
 } from 'lucide-react';
-import { submitQuery, fetchDocuments, submitFeedback, ingestSamples, uploadDocument, deleteDocument } from './api/client';
+import { submitQuery, fetchDocuments, submitFeedback, ingestSamples, uploadDocument, deleteDocument, deleteAllDocuments, ingestUrl } from './api/client';
 import { SourceCitation, DocumentItem } from './types/api';
 import { MarkdownView } from './components/MarkdownView';
 
@@ -185,6 +185,8 @@ export default function App(): React.JSX.Element {
   const [feedbackStatus, setFeedbackStatus] = useState<string>('');
   const [ingesting, setIngesting] = useState<boolean>(false);
   const [ingestStatus, setIngestStatus] = useState<string>('');
+  const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
+  const [urlInput, setUrlInput] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -239,6 +241,28 @@ export default function App(): React.JSX.Element {
     }
   };
 
+  const handleUrlIngest = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    const targetUrl = urlInput.trim();
+    if (!targetUrl || ingesting) return;
+    setIngesting(true);
+    setIngestStatus(`Fetching & indexing ${targetUrl}...`);
+    try {
+      const res = await ingestUrl(targetUrl);
+      setIngestStatus(`Success! Indexed ${res.chunks_indexed} chunks from "${res.title}".`);
+      setUrlInput('');
+      setShowUrlInput(false);
+      setSelectedDocId(res.url);
+      loadDocuments();
+      setTimeout(() => setIngestStatus(''), 5000);
+    } catch (err: any) {
+      setIngestStatus(`URL error: ${err?.message || 'Failed to index URL'}`);
+      setTimeout(() => setIngestStatus(''), 6000);
+    } finally {
+      setIngesting(false);
+    }
+  };
+
   const handleDeleteDocument = async (docId: string, title: string): Promise<void> => {
     if (!window.confirm(`Are you sure you want to delete "${title}"?`)) return;
     try {
@@ -248,6 +272,20 @@ export default function App(): React.JSX.Element {
       setTimeout(() => setIngestStatus(''), 3000);
     } catch (err: any) {
       setIngestStatus(`Failed to delete: ${err?.message || 'Error'}`);
+      setTimeout(() => setIngestStatus(''), 4000);
+    }
+  };
+
+  const handleDeleteAllDocuments = async (): Promise<void> => {
+    if (!window.confirm('Are you sure you want to delete ALL indexed documents and uploaded files? This cannot be undone.')) return;
+    try {
+      const res = await deleteAllDocuments();
+      setIngestStatus(`Deleted all documents (${res.chunks_deleted} chunks cleared)`);
+      setSelectedDocId('all');
+      loadDocuments();
+      setTimeout(() => setIngestStatus(''), 4000);
+    } catch (err: any) {
+      setIngestStatus(`Failed to delete all: ${err?.message || 'Error'}`);
       setTimeout(() => setIngestStatus(''), 4000);
     }
   };
@@ -321,16 +359,28 @@ export default function App(): React.JSX.Element {
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <BookOpen className="w-3.5 h-3.5" /> Indexed Documents ({documents.length})
             </h2>
-            <button
-              onClick={loadDocuments}
-              title="Refresh document list"
-              className="p-1 hover:text-indigo-400 text-slate-500 transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              {documents.length > 0 && (
+                <button
+                  onClick={handleDeleteAllDocuments}
+                  title="Delete all documents"
+                  className="px-2 py-0.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/60 border border-rose-800/60 rounded flex items-center gap-1 text-[11px] font-medium transition-colors"
+                >
+                  <Trash2 className="w-3 h-3 text-rose-400" />
+                  <span>Clear All</span>
+                </button>
+              )}
+              <button
+                onClick={loadDocuments}
+                title="Refresh document list"
+                className="p-1 hover:text-indigo-400 text-slate-500 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="grid grid-cols-2 gap-2 mb-2">
             <input
               type="file"
               ref={fileInputRef}
@@ -356,6 +406,38 @@ export default function App(): React.JSX.Element {
               {ingesting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
               Re-index All
             </button>
+          </div>
+
+          <div className="mb-3">
+            <button
+              onClick={() => setShowUrlInput(!showUrlInput)}
+              disabled={ingesting}
+              className="w-full text-xs font-medium bg-slate-850 hover:bg-slate-800 text-cyan-300 border border-slate-750 py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+              title="Import content from any public web page URL"
+            >
+              <Globe className="w-3.5 h-3.5 text-cyan-400" />
+              {showUrlInput ? 'Cancel URL Import' : 'Import Public URL'}
+            </button>
+            {showUrlInput && (
+              <form onSubmit={handleUrlIngest} className="mt-2 p-2.5 bg-slate-900 border border-cyan-800/40 rounded-lg flex flex-col gap-2 shadow-inner">
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="https://example.com/docs..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={ingesting || !urlInput.trim()}
+                  className="text-xs bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-medium py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                >
+                  {ingesting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                  Extract & Add to Knowledge
+                </button>
+              </form>
+            )}
           </div>
 
           {ingestStatus && (
@@ -386,7 +468,11 @@ export default function App(): React.JSX.Element {
                 >
                   <div className="flex items-center justify-between mb-1 gap-2">
                     <div className="flex items-center gap-2 font-medium text-xs text-indigo-300 min-w-0 flex-1">
-                      <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-indigo-300' : 'text-indigo-400'}`} />
+                      {doc.id.startsWith('http://') || doc.id.startsWith('https://') ? (
+                        <Globe className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-cyan-300' : 'text-cyan-400'}`} />
+                      ) : (
+                        <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-indigo-300' : 'text-indigo-400'}`} />
+                      )}
                       <span className="truncate font-mono" title={doc.title}>{doc.title}</span>
                     </div>
                     {isSelected && (
@@ -523,9 +609,11 @@ export default function App(): React.JSX.Element {
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                             {msg.sources.map((src, sIdx) => {
                               const matchPct = Math.round((src.score ?? 1.0) * 100);
-                              const isWeb = src.document_id.startsWith('[Web]');
+                              const isWeb = src.document_id.startsWith('[Web]') || src.document_id.startsWith('http://') || src.document_id.startsWith('https://');
                               const urlMatch = src.chunk_text.match(/https?:\/\/[^\s—]+/);
-                              const webUrl = isWeb && urlMatch ? urlMatch[0] : null;
+                              const webUrl = (src.document_id.startsWith('http://') || src.document_id.startsWith('https://'))
+                                ? src.document_id
+                                : (isWeb && urlMatch ? urlMatch[0] : null);
 
                               return (
                                 <div

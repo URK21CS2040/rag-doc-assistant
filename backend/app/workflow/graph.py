@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from langgraph.graph import StateGraph, END
+from app.config import settings
 from app.workflow.state import GraphState
 from app.workflow.nodes import WorkflowNodes
 
@@ -52,6 +53,10 @@ class WorkflowService:
         return workflow.compile()
 
     def _decide_after_generation(self, state: GraphState) -> str:
+        if state.get("is_fallback_view"):
+            logger.info("Generation presented fallback view for unavailable model. Ending workflow without Tavily fallback.")
+            return "end"
+
         answer = state.get("answer", "").strip().lower()
         sources = state.get("sources", [])
 
@@ -66,16 +71,26 @@ class WorkflowService:
             "does not mention",
             "not provide information about",
         ]
-        is_refusal = any(marker in answer for marker in refusal_markers)
-        if is_refusal:
-            logger.info("Generation concluded answer is not covered in local documents. Triggering fallback.")
+        is_pure_refusal = any(marker in answer for marker in refusal_markers) and (len(sources) == 0 or answer.startswith("this information is not covered"))
+        if is_pure_refusal:
+            state["tavily_reason"] = "Local documentation contains no information answering this question"
+            logger.info("Generation concluded answer is not covered in local documents. Reason: %s. Triggering fallback.", state["tavily_reason"])
+            return "fallback"
+
+        # Partial coverage check: If answer contains partial documentation facts and indicates missing details
+        if state.get("is_partial") and settings.is_valid_tavily_key():
+            state["tavily_reason"] = "Local documentation contains partial information; supplementing missing details via web search"
+            logger.info("Generation identified partial local context. Reason: %s. Routing to fallback to supplement.", state["tavily_reason"])
             return "fallback"
 
         # Ungrounded check: If generation produced text but has 0 supporting citations/sources
         if not sources and state.get("route") == "generation":
-            logger.info("Generation produced ungrounded answer without valid citations. Triggering fallback.")
+            state["tavily_reason"] = "Generation produced ungrounded answer without valid citations"
+            logger.info("Generation produced ungrounded answer without valid citations. Reason: %s. Triggering fallback.", state["tavily_reason"])
             return "fallback"
 
+        state["final_source"] = "Local Documentation (PDF)"
+        logger.info("[RAG Final] Route: %s | Source: %s | Citations: %d", state.get("route"), state["final_source"], len(sources))
         return "end"
 
     def _decide_next_node(self, state: GraphState) -> str:

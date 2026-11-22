@@ -1,15 +1,33 @@
+import os
 import asyncio
 import logging
+from typing import Optional
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
+
+# Silence broken PostHog telemetry in ChromaDB
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+try:
+    import posthog
+    posthog.capture = lambda *args, **kwargs: None
+except Exception:
+    pass
+try:
+    import chromadb.telemetry.product.posthog as chroma_posthog
+    chroma_posthog.Posthog.capture = lambda *args, **kwargs: None
+    chroma_posthog.Posthog._direct_capture = lambda *args, **kwargs: None
+except Exception:
+    pass
 from app.schemas import (
     QueryRequest,
     QueryResponse,
     IngestRequest,
     IngestResponse,
+    UrlIngestRequest,
+    UrlIngestResponse,
     DocumentListResponse,
     FeedbackRequest,
     FeedbackResponse,
@@ -194,6 +212,73 @@ async def list_documents(container: Container = Depends(get_container)) -> Docum
     docs = await asyncio.to_thread(vector_store.get_all_documents)
     return DocumentListResponse(documents=docs)
 
+@app.post("/ingest/url", response_model=UrlIngestResponse)
+async def ingest_url_endpoint(
+    request: UrlIngestRequest,
+    container: Container = Depends(get_container)
+) -> UrlIngestResponse:
+    if not request.url or not request.url.strip():
+        raise HTTPException(status_code=400, detail="URL cannot be empty")
+
+    ingestion_service: IngestionServiceProtocol = container.get_ingestion_service()
+    try:
+        result = await asyncio.to_thread(ingestion_service.ingest_url, request.url.strip())
+        return UrlIngestResponse(
+            status="success",
+            chunks_indexed=result["chunks_indexed"],
+            url=result["url"],
+            title=result["title"],
+        )
+    except ValueError as ve:
+        logger.warning("URL ingestion failed for '%s': %s", request.url, ve)
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        logger.exception("Unexpected error ingesting URL '%s'", request.url)
+        raise HTTPException(status_code=500, detail=f"Failed to ingest URL: {e}")
+
+@app.delete("/documents")
+@app.delete("/documents/")
+async def delete_all_documents_endpoint(
+    document_id: Optional[str] = None,
+    container: Container = Depends(get_container)
+):
+    if document_id:
+        safe_name = Path(document_id).name
+        uploads_dir = Path(settings.uploads_directory).resolve()
+        target_file = (uploads_dir / safe_name).resolve()
+
+        if target_file.is_file() and target_file.parent == uploads_dir:
+            try:
+                target_file.unlink()
+                logger.info("Deleted physical file: %s", target_file)
+            except Exception as e:
+                logger.warning("Failed to delete physical file %s: %s", target_file, e)
+
+        vector_store: VectorStoreProtocol = container.get_vector_store()
+        await asyncio.to_thread(vector_store.delete_document, document_id)
+        return {"status": "deleted", "document_id": document_id}
+
+    uploads_dir = Path(settings.uploads_directory).resolve()
+    files_deleted = 0
+    if uploads_dir.exists():
+        for file in uploads_dir.iterdir():
+            if file.is_file():
+                try:
+                    file.unlink()
+                    files_deleted += 1
+                except Exception as e:
+                    logger.warning("Failed to delete physical file %s: %s", file, e)
+
+    vector_store: VectorStoreProtocol = container.get_vector_store()
+    chunks_deleted = await asyncio.to_thread(vector_store.delete_all_documents)
+    logger.info("Deleted all documents: %d physical files removed, %d chunks cleared from vector store", files_deleted, chunks_deleted)
+    return {
+        "status": "success",
+        "message": "All documents deleted",
+        "files_deleted": files_deleted,
+        "chunks_deleted": chunks_deleted,
+    }
+
 @app.delete("/documents/{document_id:path}")
 async def delete_document_endpoint(
     document_id: str,
@@ -204,7 +289,7 @@ async def delete_document_endpoint(
     target_file = (uploads_dir / safe_name).resolve()
 
     # If the physical file exists in uploads, remove it
-    if target_file.exists() and uploads_dir in target_file.parents:
+    if target_file.is_file() and target_file.parent == uploads_dir:
         try:
             target_file.unlink()
             logger.info("Deleted physical file: %s", target_file)
@@ -212,7 +297,7 @@ async def delete_document_endpoint(
             logger.warning("Failed to delete physical file %s: %s", target_file, e)
 
     # Remove from vector store and BM25 index
-    vector_store = container.get_vector_store()
+    vector_store: VectorStoreProtocol = container.get_vector_store()
     await asyncio.to_thread(vector_store.delete_document, document_id)
     return {"status": "deleted", "document_id": document_id}
 

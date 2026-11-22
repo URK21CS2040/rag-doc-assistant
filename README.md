@@ -8,20 +8,34 @@
 [![React](https://img.shields.io/badge/React-18_TypeScript-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Compose_Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assistant for complex technical documentation. Engineered with a **FastAPI + LangGraph** backend, **ChromaDB** hybrid vector-lexical store, **Groq LPU** ultra-low-latency inference, **Tavily** live web-search fallback, and a modern **React 18 + TypeScript** dashboard.
+A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assistant for complex technical documentation and live web research. Built on a **FastAPI + LangGraph** reactive workflow, **ChromaDB** dense-lexical vector store with FastEmbed semantic embeddings (`BAAI/bge-small-en-v1.5`), **GroqCloud LPU** high-throughput inference with resilient multi-tier fallback chains, **Tavily Advanced** web search, and a modern **React 18 + TypeScript** dashboard.
 
 ---
 
 ## Key Features
 
-- **Document-First Grounding:** Strict prioritization of local technical PDF and Markdown documentation over external sources.
-- **Hybrid Retrieval & Re-ranking:** Combines dense cosine similarity with exact phrase matching, section header detection, domain synonym expansion, and mid-sentence fragment suppression.
-- **Self-Corrective LangGraph Workflow:** Query intent classification, dynamic document grading, and automatic fallback routing.
-- **Deterministic Grounding Synthesizer:** Multi-layered resilience providing exact mathematical formulas, system specifications, and concept definitions even during upstream LLM rate-limit windows.
-- **Dynamic Multi-Question Processing:** Automatically detects and splits multi-part questions (e.g., *"What is the CRITICAL threshold and what is the maximum supported assets per gateway?"*), answering each part under distinct numbered items without skipping.
-- **Page-Level Citations:** Transparent references linking directly to source documents and page numbers (e.g., `[Page 2]`, `[Page 5]`).
-- **Smart Web Search Fallback:** When a query's answers are genuinely absent from local indexed documents, the system triggers live Tavily search with a clear notice banner.
-- **Full Dockerization:** Monorepo with isolated multi-stage backend (`uvicorn`) and frontend (`nginx`) containers orchestrated via `docker-compose`.
+- **Document-First Grounding:** Strict prioritization of local technical PDF, Markdown, and scraped web documentation over external sources. External web search is only used when local context is genuinely insufficient.
+- **Multi-Format Ingestion:**
+  - **Local Files:** Upload `.pdf` and `.md` technical manuals, specifications, and architecture documents.
+  - **Public Web URLs:** Scrape and index public web documentation (`POST /ingest-url`) with built-in SSRF protection against private IP ranges and localhost probing.
+  - **Document Management:** Delete individual documents (`DELETE /documents/{id}`) or perform a bulk wipe (`DELETE /documents?confirm=true`) with automated ChromaDB vector cleanup.
+- **Hybrid Retrieval & Dense Safety Net:**
+  - FastEmbed dense vector embeddings (`BAAI/bge-small-en-v1.5`, 384-dim) combined with exact phrase matching, domain keyword boosting, and document auto-scoping.
+  - **Dense Retrieval Safety Net:** When dense similarity is high ($\ge 0.80$), relevant chunks are protected against LLM grader stylistic mismatches (e.g. terse facts vs. long narrative scenario questions).
+- **Resilient Multi-Tier LLM Generation:**
+  - Multi-model fallback chain: `openai/gpt-oss-20b` $\rightarrow$ `qwen/qwen3.8-27b` $\rightarrow$ `openai/gpt-oss-120b`.
+  - Expanded 3,000 output-token budgets to eliminate truncation (`finish_reason="length"`).
+  - Explicit empty-generation detection: triggers fallback even if the primary model returns HTTP 200 with 0 content tokens.
+  - Internal reasoning isolation: reasoning tokens from reasoning models are captured in telemetry logs and strictly excluded from user-facing answers.
+  - Smart rate-limit (HTTP 429) & timeout handling: instantly transitions to alternative model pools rather than repeatedly hammering throttled models.
+- **Tavily Advanced Web Search Fallback:**
+  - Uses `search_depth="advanced"` for deep, comprehensive web extraction.
+  - **Zero Confirmation Bias:** Removes synthetic search summaries from the context to prevent hallucinated consensus.
+  - **Statistical Recency & Conflict Resolution:** Distinguishes between historical intermediate milestones (e.g., reaching 200 sixes in 2019) and current career totals (e.g., 264 sixes), while accounting for non-monotonic metrics, measurement windows, and source authority.
+  - **Discrepancy Disclosure:** Explicitly notes differences when reputable sources disagree rather than inventing false certainty.
+  - **Citation-Aligned Explainability:** Parses inline `[n]` citations and highlights only the specific sources supporting the final answer.
+- **Self-Corrective LangGraph Architecture:** State machine supporting query intent classification, pronoun coreference resolution across multi-turn chats, query rewrites on retry, and verified source grounding.
+- **Full Dockerization:** Multi-stage backend (`uvicorn`) and frontend (`nginx`) containers orchestrated via `docker-compose`.
 
 ---
 
@@ -35,45 +49,42 @@ A production-grade, self-corrective Retrieval-Augmented Generation (RAG) assista
                                                ▼
                                   ┌──────────────────────────┐
                                   │   Query Analysis Node    │
-                                  │  (Intent Classification) │
+                                  │  - Intent Classification │
+                                  │  - Pronoun Coreference   │
+                                  │  - Target Document Scope │
                                   └────────────┬─────────────┘
                                                │
                                                ▼
                                   ┌──────────────────────────┐
                                   │     Retrieval Node       │
-                                  │ (Multi-Query Splitting + │
-                                  │ Hybrid Vector & Lexical) │
+                                  │  - FastEmbed Dense Search│
+                                  │  - ChromaDB Top-K Search │
                                   └────────────┬─────────────┘
                                                │
                                                ▼
                                   ┌──────────────────────────┐
                                   │  Document Grading Node   │
-                                  │  (Relevance Evaluation)  │
+                                  │  - Dense Safety Net (≥.8)│
+                                  │  - LLM Batch Relevance   │
+                                  │  - Keyword Protection    │
                                   └───────┬──────────┬───────┘
-                    Relevant Chunks       │          │  Insufficient Local
-                   (Document Match)       │          │  Information
+                     Relevant Chunks      │          │  Insufficient Local
+                    (Document Match)      │          │  Information
                                           ▼          ▼
                            ┌──────────────────┐  ┌──────────────────┐
                            │ Generation Node  │  │  Fallback Node   │
-                           │ (Context Prompt  │  │  (Tavily Live    │
-                           │  + Groq LPU LLM) │  │   Web Search)    │
+                           │ - Multi-Tier LLM │  │  - Tavily Adv.   │
+                           │   Fallback Chain │  │  - Date/Milestone│
+                           │ - Token Budgets  │  │    Resolution    │
+                           │ - Citations [n]  │  │  - Discrepancies │
                            └──────────┬───────┘  └────────┬─────────┘
                                       │                   │
                                       ▼                   ▼
                            ┌────────────────────────────────────────┐
                            │  Interactive Answer + Page Citations   │
-                           │      + Pipeline Trace / Explainability │
+                           │     + Pipeline Route & Explainability  │
                            └────────────────────────────────────────┘
 ```
-
-### Hybrid Retrieval Strategy
-
-Candidates are retrieved and ranked using a multi-factor hybrid approach:
-- **Semantic Vector Search**: Dense embeddings capture conceptual meaning across queries.
-- **Lexical Keyword Matching**: Exact and stemmed keyword matches prioritize authoritative sections.
-- **Domain Synonym Expansion**: Maps technical synonyms (e.g., alert levels, buffer duration, hardware specs).
-- **Phrase & Header Priority**: Boosts exact multi-word phrase matches and structured section headers.
-- **Fragment Suppression**: Identifies and filters out broken mid-sentence text fragments to ensure clean context.
 
 ---
 
@@ -85,19 +96,20 @@ rag-doc-assistant/
 │   ├── app/
 │   │   ├── core/              # Dependency injection & multi-model LLM factory
 │   │   │   ├── container.py
-│   │   │   └── llm_factory.py # Groq Cloud, Grok (xAI), and OpenAI clients
+│   │   │   └── llm_factory.py # Groq LPU multi-model fallback chain, FastEmbed embeddings
 │   │   ├── domain/            # Domain entities and typing interfaces
 │   │   │   ├── entities.py    # DocumentChunk, IngestedDocument, Feedback
 │   │   │   └── interfaces.py  # Strict SOLID protocols
 │   │   ├── ingestion/         # Document parsers, chunking, and ChromaDB
 │   │   │   ├── chunker.py     # Recursive character token splitting
-│   │   │   ├── loaders.py     # PDF (pypdf) & Markdown extractors
+│   │   │   ├── loaders.py     # PDF (pypdf), Markdown, and Web URL extractors with SSRF defense
+│   │   │   ├── service.py     # Ingestion coordination & document deletion
 │   │   │   └── vector_store.py# ChromaDB persistent vector store & hybrid search
-│   │   ├── storage/           # In-memory and persistent feedback repositories
+│   │   ├── storage/           # Persistent feedback & metadata repositories
 │   │   ├── workflow/          # LangGraph state machine
 │   │   │   ├── graph.py       # Graph definition & conditional edge routing
 │   │   │   ├── nodes.py       # Analysis, retrieval, grading, generation, fallback
-│   │   │   ├── prompts.py     # Compact, zero-hallucination prompt templates
+│   │   │   ├── prompts.py     # Grounded, date-aware, anti-hallucination prompts
 │   │   │   └── state.py       # TypedDict graph state definitions
 │   │   ├── config.py          # Pydantic v2 application configuration
 │   │   ├── main.py            # FastAPI REST API endpoints
@@ -105,13 +117,13 @@ rag-doc-assistant/
 │   ├── data/
 │   │   ├── chroma/            # Persistent ChromaDB storage
 │   │   └── sample_docs/       # Technical specifications & concept manuals
-│   ├── tests/                 # Integration and unit test suite
+│   ├── tests/                 # Integration and unit test suite (28 passing tests)
 │   ├── Dockerfile             # Multi-stage Python 3.11 container
 │   └── requirements.txt       # Backend dependencies
 ├── frontend/
 │   ├── src/
-│   │   ├── api/               # Typed HTTP client (query, documents, feedback)
-│   │   ├── components/        # MarkdownView custom renderer & drawer
+│   │   ├── api/               # Typed HTTP client (query, documents, URL ingest, feedback)
+│   │   ├── components/        # MarkdownView custom renderer, drawer, upload & URL modals
 │   │   ├── types/             # TypeScript API interfaces
 │   │   ├── App.tsx            # Main chat application & pipeline trace view
 │   │   └── main.tsx           # React entry point
@@ -131,45 +143,54 @@ The backend exposes an interactive OpenAPI specification at `http://localhost:80
 
 | Method | Endpoint | Description | Payload / Response |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/query` | Execute question through RAG LangGraph workflow | `{ "question": "..." }` $\rightarrow$ Answer, Sources, Intent |
-| `POST` | `/ingest` | Index a document file path into vector store | `{ "file_path": "..." }` $\rightarrow$ Status confirmation |
-| `POST` | `/upload` | Multipart upload and index new `.pdf` or `.md` | `multipart/form-data` $\rightarrow$ Status confirmation |
+| `POST` | `/query` | Execute question through RAG LangGraph workflow | `{ "question": "...", "document_ids": [...] }` $\rightarrow$ Answer, Sources, Route, Relevance Score |
+| `POST` | `/upload` | Multipart upload and index new `.pdf` or `.md` files | `multipart/form-data` $\rightarrow$ Status confirmation & chunk count |
+| `POST` | `/ingest-url` | Scrape, parse, and index a public web documentation URL | `{ "url": "https://..." }` $\rightarrow$ Status, title, chunks indexed |
 | `GET` | `/documents` | List all indexed documents with snippet previews | Array of document metadata and content previews |
-| `POST` | `/feedback` | Submit user thumbs-up/down feedback | `{ "session_id": "...", "score": 1, "comment": "..." }` |
-| `DELETE` | `/documents/{id}` | Remove a document from the vector collection | Status confirmation |
+| `DELETE` | `/documents/{id}` | Remove a single document and its vectors from ChromaDB | Status confirmation |
+| `DELETE` | `/documents` | Bulk delete all indexed documents (`?confirm=true`) | Status confirmation & deleted count |
+| `POST` | `/feedback` | Submit user thumbs-up/down feedback | `{ "session_id": "...", "rating": "thumbs_up", "comment": "..." }` |
 
 ---
 
 ## Verification & Test Results
 
-The application has been tested and verified across all required technical domains:
+The application has been verified across technical documentation, statistical recency, conflict resolution, and negative test cases:
 
-| # | Question / Topic | Output Summary | Cited Source | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | **Precision & Recall** | Exact formulas and definitions for True Positives, False Positives, and False Negatives. Defines accuracy vs completeness. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
-| 2 | **PCA** | Unsupervised dimensionality reduction solving eigen-value equation ($\Sigma v = \lambda v$) and explained variance ratio. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 15]` | **Verified** |
-| 3 | **F1-Score Formula** | Harmonic mean formula based on Precision and Recall, and confusion matrix representation. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf [Page 8]` | **Verified** |
-| 4 | **Random Forest** | Ensemble bagging explanation: Majority voting for classification, averaging for regression. | `Complete_Machine_Learning_Concepts_and_Formulas.pdf` | **Verified** |
-| 5 | **EdgeWatch Anomaly Detection** | Isolation Forest model trained unsupervised on industrial rotating assets evaluating vibration RMS, peak-to-peak amplitude, kurtosis, and temperature delta. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 6 | **EdgeWatch Validation F1-Score** | Validation evaluation metrics at production alert threshold. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 7 | **Minimum Hardware Requirements** | Minimum processor, RAM, and SSD storage requirements for edge gateways. | `edge_ai_monitoring_technical_specification.pdf [Page 3]` | **Verified** |
-| 8 | **EdgeWatch System Specifications** | Inference window overlap, maximum supported gateway asset capacity, offline retention buffer duration, and event dispatch latency. | `edge_ai_monitoring_technical_specification.pdf [Page 2]` | **Verified** |
-| 9 | **API Endpoints** | Lists RAG application REST endpoints alongside EdgeWatch gateway service endpoints. | `edge_ai_monitoring_technical_specification.pdf [Page 5]` | **Verified** |
-| 10 | **Multi-Question Queries** | Automatically identifies and answers each question under distinct numbered points. | Combined Page Citations | **Verified** |
-| 11 | **External Web Fallback** | Unindexed external topics trigger Tavily live search with notice banner: `*Note: No matching local documentation was found...*` | Live Web Search (Tavily) | **Verified** |
+| # | Question / Scenario | Expected Behavior | Observed Result | Route | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | **AS-TS-204 Critical Threshold** | Retrieve exact threshold from technical document | Answered verbatim from document with page citation | `generation` | **Verified** |
+| 2 | **EdgeWatch System Specs** | Multi-specification lookup for gateway capacity & buffer | Extracted complete specifications under structured points | `generation` | **Verified** |
+| 3 | **React Component vs Element** | Scoped conceptual comparison from React docs | Grounded definitions citing source chunks | `generation` | **Verified** |
+| 4 | **Career Totals vs Milestones** (*"How many sixes did MS Dhoni hit in his entire IPL career?"*) | Prioritize updated career total (264) over older 2019 milestone (203) | Answered **264 sixes**, cited ESPN, excluded outdated milestone | `web_search` | **Verified** |
+| 5 | **Outdated Milestone Handling** (*"How many centuries has Virat Kohli scored in the IPL?"*) | Identify current career record (9) over older historical counts | Reported 9 centuries with authoritative sources | `web_search` | **Verified** |
+| 6 | **Dynamic Measurements** (*"Distance of Voyager 1 from Earth today"*) | Disclose continuously changing distance by measurement date | Outlined date-specific measurements & explained dynamics | `web_search` | **Verified** |
+| 7 | **Uncovered / Nonsense Entity** | Explicitly state lack of reliable information | Declined to invent numbers; reported unverified | `web_search` | **Verified** |
+| 8 | **Public URL Web Ingestion** | Ingest external URL, chunk, embed, and query | Clean text extraction and instant question answering | `generation` | **Verified** |
 
 ### Automated Test Suite Execution
-```bash
-docker exec rag_backend pytest
-```
-Output:
-```text
-tests/integration/test_api_endpoints.py ..            PASSED
-tests/unit/test_chunker_and_loaders.py .              PASSED
-tests/unit/test_llm_factory.py ..                     PASSED
-tests/unit/test_workflow_nodes_and_routing.py .       PASSED
 
-All test cases passed successfully.
+All 28 unit and integration tests pass cleanly:
+
+```bash
+docker exec rag_backend pytest /app/tests
+```
+
+```text
+============================= test session starts ==============================
+collected 28 items
+
+tests/integration/test_api_endpoints.py .......                          [ 25%]
+tests/integration/test_pipeline_and_endpoints.py .....                   [ 42%]
+tests/unit/test_anti_hallucination.py .....                              [ 60%]
+tests/unit/test_chunker_and_loaders.py .                                 [ 64%]
+tests/unit/test_feedback_sqlite.py .                                     [ 67%]
+tests/unit/test_llm_factory.py ..                                        [ 75%]
+tests/unit/test_loaders_and_uploads.py ....                              [ 89%]
+tests/unit/test_retrieval_and_store.py ..                                [ 96%]
+tests/unit/test_workflow_nodes_and_routing.py .                          [100%]
+
+======================= 28 passed, 14 warnings in 52.52s =======================
 ```
 
 ---
@@ -185,11 +206,12 @@ All test cases passed successfully.
    ```
 
 2. **Configure Environment:**
-   Create a `.env` file in the root or `backend/` directory:
+   Create a `.env` file in the root directory:
    ```env
    LLM_PROVIDER=groq
    GROQ_API_KEY=gsk_your_groq_api_key_here
-   GROQ_MODEL=openai/gpt-oss-120b
+   GROQ_MODEL=openai/gpt-oss-20b
+   GROQ_FALLBACK_MODEL=qwen/qwen3.8-27b
    TAVILY_API_KEY=tvly-your_tavily_key_here
    CHROMA_PERSIST_DIRECTORY=./data/chroma
    PORT=8000
@@ -203,7 +225,7 @@ All test cases passed successfully.
 4. **Access the application:**
    - **Web UI**: `http://localhost`
    - **FastAPI Interactive Docs**: `http://localhost:8000/docs`
-   - **Backend Health Check**: `http://localhost:8000/documents`
+   - **Backend Health / Document List**: `http://localhost:8000/documents`
 
 ---
 

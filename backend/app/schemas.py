@@ -27,6 +27,15 @@ class IngestResponse(BaseModel):
     status: str
     chunks_indexed: int
 
+class UrlIngestRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+
+class UrlIngestResponse(BaseModel):
+    status: str
+    chunks_indexed: int
+    url: str
+    title: str
+
 class DocumentItem(BaseModel):
     id: str
     title: str
